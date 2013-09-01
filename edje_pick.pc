@@ -1,0 +1,10 @@
+prefix=/opt/e17
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: edje_pick
+Description: edje_pick tool for merging edj files.
+Version: 0.2.0.0
+Libs: -L${libdir} -llibedjepick
+Cflags: -I${includedir}/edjepick-0

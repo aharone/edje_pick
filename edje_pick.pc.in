@@ -1,0 +1,10 @@
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+libdir=@libdir@
+includedir=@includedir@
+
+Name: edje_pick
+Description: edje_pick tool for merging edj files.
+Version: @VERSION@
+Libs: -L${libdir} -llibedjepick
+Cflags: -I${includedir}/edjepick-@VMAJ@
