@@ -132,7 +132,7 @@ EAPI void _edje_pick_out_file_free(Edje_File *out_file);
 EAPI void _edje_pick_args_show(Eina_List *ifs, char *out);
 EAPI int _edje_pick_cleanup(Eina_List *ifs, Edje_File *out_file, Edje_Pick_Status s, Eina_List *a_files, Eina_List *i_files, Eina_List *groups, const char *errfile, const char *errgroup);
 EAPI int _group_name_in_other_file(Eina_List *inp_files, void *d1, void *d2);
-EAPI int _edje_pick_command_line_parse(int argc, char **argv, Eina_List **ifs, char **ofn);
+EAPI int _edje_pick_command_line_parse(int argc, char **argv, Eina_List **ifs, char **ofn, Eina_Bool cleanup);
 EAPI void _edje_pick_external_dir_update(Edje_File *o, Edje_File *edf);
 EAPI Edje_File * _edje_pick_output_prepare(Edje_File *o, Edje_File *edf, char *name);
 EAPI int _edje_pick_header_make(Edje_File *out_file , Edje_File *edf, Eina_List *ifs);

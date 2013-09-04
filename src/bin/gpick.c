@@ -11,6 +11,10 @@
 #define DRAG_TIMEOUT 0.3
 #define ANIM_TIME 0.5
 
+#define EDJE_PICK_SYS_DND_PREFIX  "file://"
+#define EDJE_PICK_SYS_DND_POSTFIX "></item>"
+#define EDJE_PICK_DND_DELIM  ':'
+
 #define EDJE_PICK_GROUPS_STR  "Groups"
 #define EDJE_PICK_IMAGES_STR  "Images"
 #define EDJE_PICK_SAMPLES_STR "Samples"
@@ -138,6 +142,12 @@ _gui_free(gui_elements *g)
 
    if (g->file_name)
      eina_stringshare_del(g->file_name);
+
+   elm_drag_item_container_del(g->gl_src);
+   elm_drop_item_container_del(g->gl_src);
+
+   elm_drag_item_container_del(g->gl_dst);
+   elm_drop_item_container_del(g->gl_dst);
 
    _gl_data_free(g->gl_src);
    _gl_data_free(g->gl_dst);
@@ -326,7 +336,8 @@ _glit_head_list_node_find(Evas_Object *gl, const char *file, const char *name)
      {
         gl_item_info *tmp;
         tmp = elm_object_item_data_get(glit);
-        Eina_Bool fn = (file) ? (!strcmp(file, tmp->file_name)) : EINA_TRUE;
+        Eina_Bool fn = (file && tmp->file_name) ?
+           (!strcmp(file, tmp->file_name)) : EINA_TRUE;
 
         if (((tmp->type == EDJE_PICK_TYPE_LIST) &&
                  (!strcmp(tmp->name, name))) && fn)
@@ -340,7 +351,7 @@ _glit_head_list_node_find(Evas_Object *gl, const char *file, const char *name)
 
 static Elm_Object_Item *
 _glit_node_find(Evas_Object *gl, gl_item_info *info)
-{
+{  /* Locate the genlist item according to data pointer */
    Elm_Object_Item *glit = elm_genlist_first_item_get(gl);
    while(glit)
      {
@@ -353,6 +364,67 @@ _glit_node_find(Evas_Object *gl, gl_item_info *info)
      }
 
    return NULL;
+}
+
+static Elm_Object_Item *
+_glit_node_find_by_info(Evas_Object *gl,
+      char *file_name,
+      Edje_Pick_Type type,
+      char *name)
+{  /* Locate the genlist item according to given info */
+   Elm_Object_Item *glit;
+   const char *type_str = NULL;
+   switch (type)
+     {
+      case EDJE_PICK_TYPE_FILE:
+           {
+              glit = _glit_head_file_node_find(
+                    gl, file_name);
+              break;
+           }
+
+      case EDJE_PICK_TYPE_LIST:
+           {
+              glit = _glit_head_list_node_find(
+                    gl, file_name, name);
+              break;
+           }
+         break;
+
+      case EDJE_PICK_TYPE_GROUP:
+         type_str = EDJE_PICK_GROUPS_STR;
+      case EDJE_PICK_TYPE_IMAGE:
+         if (type_str == NULL) type_str = EDJE_PICK_IMAGES_STR;
+      case EDJE_PICK_TYPE_SAMPLE:
+         if (type_str == NULL) type_str = EDJE_PICK_SAMPLES_STR;
+      case EDJE_PICK_TYPE_FONT:
+           {  /* Find the group, image, smaple, or font item */
+              if (type_str == NULL) type_str = EDJE_PICK_FONTS_STR;
+              glit = _glit_head_list_node_find(
+                    gl, file_name,
+                    type_str);
+              if (glit)
+                {
+                   gl_item_info *info =
+                      elm_object_item_data_get(glit);
+
+                   info = eina_list_search_unsorted(
+                         info->sub,
+                         _item_name_cmp, name);
+
+                   /* Find the GL group node */
+                   glit = _glit_node_find(gl, info);
+                }
+              break;
+           }
+         break;
+
+
+      default:
+         glit = NULL;
+     }
+
+   return glit;
 }
 
 static char *
@@ -489,6 +561,7 @@ _load_file(Evas_Object *gl,
              free(err);
              printf("<%s> Failed to open file <%s>\n", __func__, file_name);
              return file_glit;
+#undef F_OPEN_ERR
           }
 
         edf = eet_data_read(ef, _edje_edd_edje_file, "edje/file");
@@ -504,6 +577,7 @@ _load_file(Evas_Object *gl,
              free(err);
              printf("<%s> Failed to read file <%s>\n", __func__, file_name);
              return file_glit;
+#undef F_READ_ERR
           }
 
         if (!(edf->collection))
@@ -519,6 +593,7 @@ _load_file(Evas_Object *gl,
              printf("<%s> File collection is empty (corrupted?) <%s>\n"
                    ,__func__, file_name);
              return file_glit;
+#undef F_COLLECT_ERR
           }
 
         if (gl == g->gl_src)
@@ -624,7 +699,6 @@ _include_bt_do(void *data, Evas_Object *obj EINA_UNUSED, void *event_info)
      }
 }
 
-
 static void
 _file_selector_show(gui_elements *g,  Evas_Smart_Cb func, Eina_Bool is_save)
 {
@@ -649,16 +723,15 @@ _file_selector_show(gui_elements *g,  Evas_Smart_Cb func, Eina_Bool is_save)
    evas_object_show(g->inwin);
 }
 
-#define ADD_ARG(LIST, STR, CNT) do{ \
-     LIST = eina_list_append(LIST, STR); \
-     CNT++; \
-}while(0);
-
 static char **
 _command_line_args_make(gui_elements *g, Eina_List *s,
       const char *prog, const char *outfile, int *argc,
       Eina_Bool strict)
 {  /* User has to free returned char ** */
+#define ADD_ARG(LIST, STR, CNT) do{ \
+     LIST = eina_list_append(LIST, STR); \
+     CNT++; \
+}while(0);
    char **argv = NULL;
    Eina_List *args = NULL;
    Eina_List *l;
@@ -745,7 +818,9 @@ _command_line_args_make(gui_elements *g, Eina_List *s,
 
    eina_list_free(args);
    return argv;
+#undef ADD_ARG
 }
+
 
 static Elm_Object_Item *
 _file_item_add(gui_elements *g, Evas_Object *gl, const char *file)
@@ -999,16 +1074,15 @@ _take_bt_clicked(void *data EINA_UNUSED,
    /* First check OK to move groups */
    if (s)
      {
-        /* Used for the parse call */
-        Eina_List *ifs = NULL;
-        char *ofn = NULL;
         int argc = 0;
         Edje_Pick_Status status = EDJE_PICK_NO_ERROR;
         char **argv = _command_line_args_make(g, s, g->argv0,
               "/tmp/out.tmp", &argc, EINA_TRUE);
 
         _edje_pick_context_set(&g->context);
-        status = _edje_pick_command_line_parse(argc, argv, &ifs, &ofn);
+        status = _edje_pick_command_line_parse(argc, argv,
+              NULL, NULL, EINA_TRUE);
+
         free(argv);
         if (status != EDJE_PICK_NO_ERROR)
           {  /* Parse came back with an error */
@@ -1126,6 +1200,7 @@ _open_file(void *data, Evas_Object *obj __UNUSED__, void *event_info)
         else
           _do_open(data, NULL, NULL);
      }
+#undef RELOAD_MSG
 }
 
 static void
@@ -1163,6 +1238,7 @@ _open_bt_clicked(void *data,
      {
         _file_selector_show(g, _open_file, EINA_FALSE);
      }
+#undef DISCARD_MSG
 }
 
 static void
@@ -1212,6 +1288,7 @@ _close_bt_clicked(void *data,
      {
         _do_close(g, NULL, NULL);
      }
+#undef CLOSE_MSG
 }
 
 static void
@@ -1331,6 +1408,7 @@ _quit_bt_clicked(void *data,
      {
         _client_win_del(g, NULL, NULL);
      }
+#undef QUIT_MSG
 }
 
 static void
@@ -1340,6 +1418,528 @@ _include_bt_clicked(void *data,
    gui_elements *g = data;
    _file_selector_show(g, _include_bt_do, EINA_FALSE);
 }
+
+/* START - Drag And Drop Support */
+#define DLMR "\n"          /* Delimiter      */
+#define FSTR "file"        /* File Prefix    */
+#define LSTR "list"        /* List Prefix    */
+#define GRPR "group"       /* Group Prefix   */
+#define IMGR "image"       /* Image Prefix   */
+#define SMPR "sample"      /* Sample Prefix  */
+#define FNTR "font"        /* Font Prefix    */
+static void
+_drop_open_file(gui_elements *g, char *file_name)
+{  /* Open a file when dropped on gl_dst genlist */
+#define DISCARD_MSG "File '%s' was modified, Discard changes?"
+#define RELOAD_MSG "File '%s' is open, reload?"
+   if (g->popup)
+     {
+        evas_object_del(g->popup);
+        g->popup = NULL;
+     }
+
+   if (file_name)
+     {
+        if (g->file_to_open)
+          eina_stringshare_del(g->file_to_open);
+
+        g->file_to_open = eina_stringshare_add(file_name);
+
+        if (g->modified)
+          {
+             const char *name = (g->file_name) ?
+                g->file_name : EDJE_PICK_NEW_FILE_NAME_STR;
+
+             char *buf = malloc(strlen(DISCARD_MSG) + strlen(name) + 1);
+             sprintf(buf, DISCARD_MSG, name);
+
+             _ok_cancel_popup_show(g, "Discard Changes", buf, "YES", "NO",
+                   _do_open, _cancel_popup);
+
+             free(buf);
+             return;
+          }
+
+        if (g->file_name && (!strcmp(g->file_name, file_name)))
+          {  /* This file is already open */
+             char *buf = malloc(strlen(RELOAD_MSG) + strlen(g->file_name) + 1);
+             sprintf(buf, RELOAD_MSG, g->file_name);
+
+             _ok_cancel_popup_show(g, "File is open", buf,
+                   "RELOAD", "CANCEL",
+                   _do_open, _cancel_popup);
+
+             free(buf);
+             return;
+          }
+
+        _do_open(g, NULL, NULL);
+     }
+#undef RELOAD_MSG
+#undef DISCARD_MSG
+}
+
+static Evas_Object *
+_gl_createicon(void *data, Evas_Object *win, Evas_Coord *xoff, Evas_Coord *yoff)
+{
+   printf("<%s> <%d>\n", __func__, __LINE__);
+   Evas_Object *icon = NULL;
+   Evas_Object *o = elm_object_item_part_content_get(data, "elm.swallow.icon");
+
+   if (o)
+     {
+        int xm, ym, w = 30, h = 30;
+        const char *f;
+        const char *g;
+        elm_image_file_get(o, &f, &g);
+        evas_pointer_canvas_xy_get(evas_object_evas_get(o), &xm, &ym);
+        if (xoff) *xoff = xm - (w/2);
+        if (yoff) *yoff = ym - (h/2);
+        icon = elm_icon_add(win);
+        elm_image_file_set(icon, f, g);
+        evas_object_size_hint_align_set(icon,
+              EVAS_HINT_FILL, EVAS_HINT_FILL);
+        evas_object_size_hint_weight_set(icon,
+              EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
+        if (xoff && yoff) evas_object_move(icon, *xoff, *yoff);
+        evas_object_resize(icon, w, h);
+     }
+
+   return icon;
+}
+
+static Eina_List *
+_gl_icons_get(void *data)
+{  /* Start icons animation before actually drag-starts */
+   printf("<%s> <%d>\n", __func__, __LINE__);
+   int yposret = 0;
+
+   Eina_List *l;
+
+   Eina_List *icons = NULL;
+
+   Evas_Coord xm, ym;
+   evas_pointer_canvas_xy_get(evas_object_evas_get(data), &xm, &ym);
+   Eina_List *items = eina_list_clone(elm_genlist_selected_items_get(data));
+   Elm_Object_Item *glit = elm_genlist_at_xy_item_get(data,
+         xm, ym, &yposret);
+   if (glit)
+     {  /* Add the item mouse is over to the list if NOT seleced */
+        void *p = eina_list_search_unsorted(items, _item_ptr_cmp, glit);
+        if (!p)
+          items = eina_list_append(items, glit);
+     }
+
+   EINA_LIST_FOREACH(items, l, glit)
+     {  /* Now add icons to animation window */
+        Evas_Object *o = elm_object_item_part_content_get(glit,
+              "elm.swallow.icon");
+
+        if (o)
+          {
+             int x, y, w, h;
+             const char *f, *g;
+             elm_image_file_get(o, &f, &g);
+             Evas_Object *ic = elm_icon_add(data);
+             elm_image_file_set(ic, f, g);
+             evas_object_geometry_get(o, &x, &y, &w, &h);
+             evas_object_size_hint_align_set(ic,
+                   EVAS_HINT_FILL, EVAS_HINT_FILL);
+             evas_object_size_hint_weight_set(ic,
+                   EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
+
+             evas_object_move(ic, x, y);
+             evas_object_resize(ic, w, h);
+             evas_object_show(ic);
+
+             icons =  eina_list_append(icons, ic);
+          }
+     }
+
+   eina_list_free(items);
+   return icons;
+}
+
+static void
+_gl_dragdone(void *data, Evas_Object *obj __UNUSED__, Eina_Bool doaccept)
+{
+   printf("<%s> <%d> data=<%s> doaccept=<%d>\n",
+         __func__, __LINE__, (char *) data, doaccept);
+
+   free(data);  /* Free DND string */
+   return;
+}
+
+static const char *
+_gl_get_drag_data(Evas_Object *obj, Elm_Object_Item *it)
+{  /* Construct a string of dragged info, user frees returned string */
+   printf("<%s> <%d>\n", __func__, __LINE__);
+   char *drag_data = NULL;
+   Eina_List *items = eina_list_clone(elm_genlist_selected_items_get(obj));
+   if (it)
+     {  /* Add the item mouse is over to the list if NOT seleced */
+        void *t = eina_list_search_unsorted(items, _item_ptr_cmp, it);
+        if (!t)
+          items = eina_list_append(items, it);
+     }
+
+   if (items)
+     {  /* Now we can actually compose string to send and start dragging */
+        Eina_List *l;
+        gl_item_info *info;
+        const char *file_name;
+        const char *str = NULL;
+        char buf[64];
+        int len = 0;
+
+        sprintf(buf, "%d%c%p", getpid(), EDJE_PICK_DND_DELIM, obj);
+
+        EINA_LIST_FOREACH(items, l , it)
+          {  /* Accomulate total length of string */
+             info = elm_object_item_data_get(it);
+             file_name = (info->file_name) ?
+                info->file_name : EDJE_PICK_NEW_FILE_NAME_STR;
+
+             switch (info->type)
+               {
+                case EDJE_PICK_TYPE_FILE:
+                     {
+                        str = FSTR;
+                        break;
+                     }
+
+                case EDJE_PICK_TYPE_LIST:
+                   str = LSTR;
+                   break;
+
+                case EDJE_PICK_TYPE_GROUP:
+                   str = GRPR;
+                   break;
+
+                case EDJE_PICK_TYPE_IMAGE:
+                   str = IMGR;
+                   break;
+
+                case EDJE_PICK_TYPE_SAMPLE:
+                   str = SMPR;
+                   break;
+
+                case EDJE_PICK_TYPE_FONT:
+                   str = FNTR;
+                   break;
+
+                default:
+                   str = NULL;
+                   break;
+               }
+
+             if (str)
+               {
+                  len += strlen(file_name) +
+                     strlen(str) + 4 /* Delimiters */ +
+                     strlen(info->name) +
+                     strlen(buf) +
+                     strlen(DLMR);
+               }
+          }
+
+        drag_data = calloc(1, (len + 1));  /* Allocate string */
+
+        EINA_LIST_FOREACH(items, l , it)
+          {  /* Compose string from items */
+             info = elm_object_item_data_get(it);
+             file_name = (info->file_name) ?
+                info->file_name : EDJE_PICK_NEW_FILE_NAME_STR;
+
+             switch (info->type)
+               {
+                case EDJE_PICK_TYPE_FILE:
+                   str = FSTR;
+                   break;
+
+                case EDJE_PICK_TYPE_LIST:
+                   str = LSTR;
+                   break;
+
+                case EDJE_PICK_TYPE_GROUP:
+                   str = GRPR;
+                   break;
+
+                case EDJE_PICK_TYPE_IMAGE:
+                   str = IMGR;
+                   break;
+
+                case EDJE_PICK_TYPE_SAMPLE:
+                   str = SMPR;
+                   break;
+
+                case EDJE_PICK_TYPE_FONT:
+                   str = FNTR;
+                   break;
+
+                default:
+                   str = NULL;
+                   break;
+               }
+
+             if (str)
+               {  /* Concat the current string */
+                  char *e = drag_data + strlen(drag_data);
+                  sprintf(e, "%s%c%s%c%s%c%s%c%s",
+                        file_name, EDJE_PICK_DND_DELIM,
+                        str, EDJE_PICK_DND_DELIM,
+                        info->name, EDJE_PICK_DND_DELIM,
+                        buf, EDJE_PICK_DND_DELIM, DLMR);
+               }
+          }
+
+        eina_list_free(items);
+        printf("<%s> <%d> Sending <%s>\n", __func__, __LINE__, drag_data);
+     }
+
+   return (const char *) drag_data;  /* Freed in dragdone */
+}
+
+static Eina_Bool
+_gl_dnd_default_anim_data_getcb(Evas_Object *obj,  /* The genlist object */
+      Elm_Object_Item *it,
+      Elm_Drag_User_Info *info)
+{  /* This called before starting to drag, mouse-down was on it */
+   printf("<%s> <%d>\n", __func__, __LINE__);
+   info->format = ELM_SEL_FORMAT_TARGETS;
+   info->createicon = _gl_createicon;
+   info->createdata = it;
+   info->icons = _gl_icons_get(obj);
+   info->dragdone = _gl_dragdone;
+
+   /* Now, collect data to send for drop from ALL selected items */
+   /* Save list pointer to remove items after drop and free list on done */
+   info->data = info->acceptdata = info->donecbdata =
+      (char *) _gl_get_drag_data(obj, it);
+
+   printf("%s - data = %s\n", __FUNCTION__, info->data);
+
+   if (info->data)
+     return EINA_TRUE;
+   else
+     return EINA_FALSE;
+}
+
+static Elm_Object_Item *
+_gl_item_getcb(Evas_Object *obj, Evas_Coord x, Evas_Coord y, int *xposret __UNUSED__, int *yposret)
+{  /* This function returns pointer to item under (x,y) coords */
+   printf("<%s> <%d> obj=<%p>\n", __func__, __LINE__, obj);
+   Elm_Object_Item *glit;
+   glit = elm_genlist_at_xy_item_get(obj, x, y, yposret);
+   if (glit)
+     printf("over <%s>, glit=<%p> yposret %i\n",
+           elm_object_item_part_text_get(glit, "elm.text"), glit, *yposret);
+   else
+     printf("over none, yposret %i\n", *yposret);
+   return glit;
+}
+
+static char *
+_edje_pick_dnd_item_info_get(char *str,
+      char **file_name,
+      Edje_Pick_Type *type,
+      char **name,
+      char **pid,
+      char **gl_str)
+{  /* Get item info: file, type, name */
+   *file_name = *name = *gl_str = NULL;
+   *type = EDJE_PICK_TYPE_UNDEF;
+
+   if (strchr(str, EDJE_PICK_DND_DELIM))
+     {  /* The case of Drag and Drop within the applicaiton */
+        char *t;
+        char dlm[2];
+        sprintf(dlm, "%c", EDJE_PICK_DND_DELIM);
+        *file_name = strtok(str, dlm);
+        t = strtok(NULL, dlm);
+        *name = strtok(NULL, dlm);
+        *pid = strtok(NULL, dlm);
+        *gl_str = strtok(NULL, dlm);
+
+        *type = EDJE_PICK_TYPE_UNDEF;
+        if (t)
+          {
+             if (!strcmp(t, FSTR)) *type = EDJE_PICK_TYPE_FILE;
+             else if (!strcmp(t, LSTR)) *type = EDJE_PICK_TYPE_LIST;
+             else if (!strcmp(t, GRPR)) *type = EDJE_PICK_TYPE_GROUP;
+             else if (!strcmp(t, IMGR)) *type = EDJE_PICK_TYPE_IMAGE;
+             else if (!strcmp(t, SMPR)) *type = EDJE_PICK_TYPE_SAMPLE;
+             else if (!strcmp(t, FNTR)) *type = EDJE_PICK_TYPE_FONT;
+          }
+
+        if (*gl_str)
+          {  /* skip the new-line if there, otherwise no more input */
+             t = strstr(((*gl_str) + strlen(*gl_str) + 1), DLMR);
+             t = (t) ? (t + 1) : NULL;
+          }
+
+        return t;
+     }
+   else
+     {  /* The case of getting file-names seperated by '\n' from system */
+        char *p = strstr(str, DLMR);
+        if (!p)
+          p =  strstr(str, EDJE_PICK_SYS_DND_POSTFIX);
+        if (!p)
+          return NULL;
+        else
+          {
+             *file_name = str;
+             *p = '\0';
+             printf("<%s> file_name=<%s>\n", __func__, *file_name);
+             return (p + 1);
+          }
+     }
+}
+
+static Eina_Bool
+_gl_dropcb(void *data, Evas_Object *obj,
+      Elm_Object_Item *it EINA_UNUSED,
+      Elm_Selection_Data *ev,
+      int xposret EINA_UNUSED,
+      int yposret EINA_UNUSED)
+{  /* This function is called when data is dropped on the genlist */
+   gui_elements *g = data;
+   char *str = strdup(ev->data);  /* We change the string, make a copy */
+   char *p = strstr(str, EDJE_PICK_SYS_DND_PREFIX);
+   printf("<%s> <%d> str=<%s>\n", __func__, __LINE__, str);
+
+   if (p)
+     {  /* Found prefix, check string */
+        char *file_name;
+        Edje_Pick_Type type;
+        char *name;
+        char *gl_str;
+        char *pid;
+        Eina_List *s = NULL;
+        Evas_Object *df = NULL;  /* Dragged From */
+        p += strlen(EDJE_PICK_SYS_DND_PREFIX);
+
+        do
+          {  /* Check input and do the drop */
+             p = _edje_pick_dnd_item_info_get
+                (p, &file_name, &type, &name, &pid, &gl_str);
+
+             if (type == EDJE_PICK_TYPE_UNDEF)
+               {  /* Dropping a file from system */
+                  if (file_name)
+                    {
+                       if (obj == g->gl_src)
+                         _include_bt_do(g, NULL, file_name);
+                       else if (obj == g->gl_dst)
+                         _drop_open_file(g, file_name);
+                    }
+               }
+             else
+               {  /* Drop from application */
+                  /* First compose a list of gl items from dopped-items */
+                  if (file_name && name && gl_str)
+                    {  /* Input is valid, add genlist item */
+                       char buf[16];
+                       sprintf(buf, "%p", g->gl_src);
+                       if (!strcmp(buf, gl_str))
+                         df = g->gl_src;
+                       else
+                         {
+                            sprintf(buf, "%p", g->gl_dst);
+                            if (!strcmp(buf, gl_str))
+                              df = g->gl_dst;
+                         }
+
+                       if (atoi(pid) != getpid())
+                         {  /* We don't alllow DND from other app */
+#define F_DROP_ERR_1 "Cannot Drag and Drop from other <%s> app."
+                            char *err = malloc(strlen(F_DROP_ERR_1) +
+                                  strlen(g->argv0) + 1);
+
+                            sprintf(err, F_DROP_ERR_1, g->argv0);
+                            _ok_popup_show(data,
+                                  _cancel_popup, "Drop Error", err);
+
+                            printf("<%s> %s.\n", __func__, err);
+                            free(err);
+                            free(str);
+                            return EINA_FALSE;
+#undef F_DROP_ERR_1
+                         }
+
+                       if (df == obj)
+                         {
+#define F_DROP_ERR_2 "Cannot drop on source."
+                            _ok_popup_show(data,
+                                  _cancel_popup, "Drop Error", F_DROP_ERR_2);
+
+                            printf("<%s> %s.\n", __func__, F_DROP_ERR_2);
+                            free(str);
+                            return EINA_FALSE;
+#undef F_DROP_ERR_2
+                         }
+                       else
+                         {  /* Ready to locate genlist item and add to s */
+                            Elm_Object_Item *glit = _glit_node_find_by_info
+                               (df, file_name, type, name);
+
+                            if (glit)
+                              s = eina_list_append(s, glit);
+                         }
+                    }
+                  else
+                    {
+                       printf("<%s> Invalide item file_name=<%s> name=<%s> gl_str=<%s> --- SKIPPED ---\n", __func__, file_name ,name, gl_str);
+                    }
+
+               }
+          }while (p);
+
+        /* First check OK to move groups */
+        if (s)
+          {
+             Edje_Pick_Status status = EDJE_PICK_NO_ERROR;
+             if (obj == g->gl_dst)
+               {  /* Parse when dropped on dest */
+                  int argc = 0;
+                  char **argv = _command_line_args_make(g, s, g->argv0,
+                        "/tmp/out.tmp", &argc, EINA_TRUE);
+
+                  _edje_pick_context_set(&g->context);
+                  status = _edje_pick_command_line_parse(argc, argv,
+                        NULL, NULL, EINA_TRUE);
+
+                  free(argv);
+               }
+
+             if (status != EDJE_PICK_NO_ERROR)
+               {  /* Parse came back with an error */
+                  printf("%s\n", _edje_pick_err_str_get(status));
+                  _ok_popup_show(data, _cancel_popup, "Drop Error",
+                        (char *) _edje_pick_err_str_get(status));
+               }
+             else
+               {  /* Add the selection to dest list */
+                  printf("\n\nParse OK\n");
+                  _edje_pick_items_move(g, df, obj, s);
+               }
+
+             eina_list_free(s);
+          }
+     }
+
+   free(str);
+   return EINA_TRUE;
+}
+#undef DLMR
+#undef FSTR
+#undef LSTR
+#undef GRPR
+#undef IMGR
+#undef SMPR
+#undef FNTR
+/* END   - Drag And Drop Support */
 
 static void
 left_pane_create(gui_elements *g)
@@ -1367,6 +1967,20 @@ left_pane_create(gui_elements *g)
    evas_object_smart_callback_add(g->gl_src, "contract,request", gl_con_req, g);
    evas_object_smart_callback_add(g->gl_src, "expanded", gl_exp, g);
    evas_object_smart_callback_add(g->gl_src, "contracted", gl_con, g);
+
+   elm_drop_item_container_add(g->gl_src,
+         ELM_SEL_FORMAT_TARGETS,
+         _gl_item_getcb,
+         NULL, NULL,
+         NULL, NULL,
+         NULL, NULL,
+         _gl_dropcb, g);
+
+   elm_drag_item_container_add(g->gl_src,
+         ANIM_TIME,
+         DRAG_TIMEOUT,
+         _gl_item_getcb,
+         _gl_dnd_default_anim_data_getcb);
 
    evas_object_show(g->gl_src);
    evas_object_show(hbx);
@@ -1400,6 +2014,20 @@ right_pane_create(gui_elements *g)
    evas_object_smart_callback_add(g->gl_dst, "contract,request", gl_con_req, g);
    evas_object_smart_callback_add(g->gl_dst, "expanded", gl_exp, g);
    evas_object_smart_callback_add(g->gl_dst, "contracted", gl_con, g);
+
+   elm_drop_item_container_add(g->gl_dst,
+         ELM_SEL_FORMAT_TARGETS,
+         _gl_item_getcb,
+         NULL, NULL,
+         NULL, NULL,
+         NULL, NULL,
+         _gl_dropcb, g);
+
+   elm_drag_item_container_add(g->gl_dst,
+         ANIM_TIME,
+         DRAG_TIMEOUT,
+         _gl_item_getcb,
+         _gl_dnd_default_anim_data_getcb);
 
    evas_object_show(g->gl_dst);
    evas_object_show(hbx);

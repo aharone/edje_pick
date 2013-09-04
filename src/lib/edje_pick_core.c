@@ -223,7 +223,8 @@ _group_name_in_other_file(Eina_List *inp_files, void *d1, void *d2)
 
 EAPI int
 _edje_pick_command_line_parse(int argc, char **argv,
-			      Eina_List **ifs, char **ofn)
+			      Eina_List **ifs, char **ofn,
+                              Eina_Bool cleanup)
 {  /* On return ifs is Input Files List, ofn is Output File Name */
    Eina_List *gpf = NULL; /* List including counters of groups-per-file */
    Eina_List *a_files = NULL;
@@ -392,6 +393,10 @@ _edje_pick_command_line_parse(int argc, char **argv,
      return _edje_pick_cleanup(files, NULL, EDJE_PICK_OUT_FILENAME_MISSING,
            a_files, i_files, groups, NULL, NULL);
    /* END   - Read command line args */
+
+   if (cleanup)  /* In case GUI call this just to do parsing */
+     return _edje_pick_cleanup(files, NULL, EDJE_PICK_NO_ERROR,
+           a_files, i_files, groups, NULL, NULL);
 
    /* Set output params, return OK */
    *ifs = files;
@@ -1111,7 +1116,9 @@ _edje_pick_process(int argc, char **argv)
    void *n;
    int k, bytes;
 
-   k = _edje_pick_command_line_parse(argc, argv, &inp_files, &output_filename);
+   k = _edje_pick_command_line_parse(argc, argv,
+         &inp_files, &output_filename, EINA_FALSE);
+
    if ( k != EDJE_PICK_NO_ERROR)
      {
         if (err)
