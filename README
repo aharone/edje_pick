@@ -1,1 +1,4 @@
-TODO
+Edje Pick - the "edj" merging tool.
+
+This repo contains edje_pick command-line tool sources + gpick
+The GUI front-end for edje_pick.
