@@ -93,6 +93,7 @@ Makefile
 src/Makefile
 src/lib/Makefile
 src/bin/Makefile
+icons/Makefile
 ])
 
 AC_OUTPUT

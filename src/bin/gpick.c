@@ -192,12 +192,16 @@ _group_item_icon_get(void *data EINA_UNUSED, Evas_Object *parent EINA_UNUSED,
    if (!strcmp(part, "elm.swallow.icon"))
      {
         gl_item_info *info = data;
-        char *file = "/home/aharon/e17/edje_pick/icons/group.png";
+        char buf[1024];
+        snprintf(buf, sizeof(buf), "%s/icons/group.png",
+              PACKAGE_DATA_DIR);
+
         Evas_Object *icon = elm_icon_add(parent);
         if (info->sub)
-          file = "/home/aharon/e17/edje_pick/icons/file.png";
+          snprintf(buf, sizeof(buf), "%s/icons/file.png",
+                PACKAGE_DATA_DIR);
 
-        elm_image_file_set(icon, file, NULL);
+        elm_image_file_set(icon, buf, NULL);
         evas_object_size_hint_aspect_set(icon, EVAS_ASPECT_CONTROL_VERTICAL, 1, 1);
         evas_object_show(icon);
         return icon;
