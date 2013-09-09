@@ -556,7 +556,7 @@ _load_file(Evas_Object *gl,
         Eet_File *ef = eet_open(file_name, EET_FILE_MODE_READ);
         if (!ef)
           {
-#define F_OPEN_ERR "Failed to open file <%s>"
+#define F_OPEN_ERR "Failed to open file '%s'"
              err = malloc(strlen(F_OPEN_ERR) +
                    strlen(file_name) + 1);
 
@@ -571,7 +571,7 @@ _load_file(Evas_Object *gl,
         edf = eet_data_read(ef, _edje_edd_edje_file, "edje/file");
         if (!edf)
           {
-#define F_READ_ERR "Failed to read file <%s>"
+#define F_READ_ERR "Failed to read file '%s'"
              eet_close(ef);
              err = malloc(strlen(F_READ_ERR) +
                    strlen(file_name) + 1);
@@ -586,7 +586,7 @@ _load_file(Evas_Object *gl,
 
         if (!(edf->collection))
           {  /* This will handle the case of empty, corrupted file */
-#define F_COLLECT_ERR "File collection is empty (corrupted?) <%s>"
+#define F_COLLECT_ERR "File collection is empty (corrupted?) '%s'"
              eet_close(ef);
              err = malloc(strlen(F_COLLECT_ERR) +
                    strlen(file_name) + 1);
@@ -1326,10 +1326,10 @@ _save_bt_clicked(void *data,
    i = rename(tmp_file_name, g->file_name);
    if (i < 0)
      {
-#define RENAME_ERR "renaming of <%s> to <%s> failed."
+#define RENAME_ERR "renaming of '%s' to '%s' failed."
         char *err = malloc(strlen(RENAME_ERR) +
               strlen(tmp_file_name) +
-              strlen(g->file_name)) + 1;
+              strlen(g->file_name) + 1);
 
         sprintf(err, RENAME_ERR, tmp_file_name, g->file_name);
         _ok_popup_show(data, _cancel_popup, "Rename Failed", err);
@@ -1857,7 +1857,7 @@ _gl_dropcb(void *data, Evas_Object *obj,
 
                        if (atoi(pid) != getpid())
                          {  /* We don't alllow DND from other app */
-#define F_DROP_ERR_1 "Cannot Drag and Drop from other <%s> app."
+#define F_DROP_ERR_1 "Cannot Drag and Drop from other '%s' app."
                             char *err = malloc(strlen(F_DROP_ERR_1) +
                                   strlen(g->argv0) + 1);
 
