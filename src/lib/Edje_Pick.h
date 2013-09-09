@@ -108,6 +108,7 @@ enum _Edje_Pick_Status
     EDJE_PICK_PARSE_FAILED,
     EDJE_PICK_HELP_SHOWN,
     EDJE_PICK_DUP_GROUP,
+    EDJE_PICK_NO_GROUP,
     EDJE_PICK_DUP_FILE_ADDED,
     EDJE_PICK_FILE_INCLUDED,
     EDJE_PICK_FILE_OPENED,
@@ -118,6 +119,7 @@ typedef enum _Edje_Pick_Status Edje_Pick_Status;
 struct _Edje_Pick
 {
    Eina_Bool v; /* Verbose */
+   int current_group_id;
    Edje_Pick_File_Params *current_file;
    Eina_List *fontlist;
    const char *errfile;

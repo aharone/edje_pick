@@ -114,6 +114,9 @@ _edje_pick_err_str_get(Edje_Pick_Status s)
       case EDJE_PICK_DUP_GROUP:
          err = "Can't fetch groups with identical name from various files.";
          break;
+      case EDJE_PICK_NO_GROUP:
+         err = "No groups to fetch from input files.";
+         break;
       case EDJE_PICK_INCLUDE_MISSING:
          err = "Cannot select groups when no input file included.";
          break;
@@ -478,7 +481,6 @@ _edje_pick_output_prepare(Edje_File *o, Edje_File *edf, char *name)
 EAPI int
 _edje_pick_header_make(Edje_File *out_file , Edje_File *edf, Eina_List *ifs)
 {
-   static int current_group_id = 0;
    Edje_Part_Collection_Directory_Entry *ce;
    Eina_Bool status = EDJE_PICK_NO_ERROR;
    Eina_List *l;
@@ -508,10 +510,10 @@ _edje_pick_header_make(Edje_File *out_file , Edje_File *edf, Eina_List *ifs)
              ce_out = malloc(sizeof(*ce_out));
              memcpy(ce_out, ce, sizeof(*ce_out));
 
-             ce_out->id = current_group_id;
+             ce_out->id = context->current_group_id;
              EINA_LOG_INFO("Changing ID of group <%d> to <%d>\n",
                    ce->id, ce_out->id);
-             current_group_id++;
+             context->current_group_id++;
 
              eina_hash_direct_add(out_file->collection, ce_out->entry, ce_out);
 
@@ -544,10 +546,10 @@ _edje_pick_header_make(Edje_File *out_file , Edje_File *edf, Eina_List *ifs)
 
                   memcpy(ce_out, ce, sizeof(*ce_out));
 
-                  ce_out->id = current_group_id;
+                  ce_out->id = context->current_group_id;
                   EINA_LOG_INFO("Changing ID of group <%d> to <%d>\n",
                         ce->id, ce_out->id);
-                  current_group_id++;
+                  context->current_group_id++;
 
                   eina_hash_direct_add(out_file->collection,ce_out->entry,
                         ce_out);
@@ -1218,6 +1220,13 @@ _edje_pick_process(int argc, char **argv)
         /* We SKIP writing source, just can't compose it */
         /* FIXME: use Edje_Edit code to generate source */
      } /* END   - Main loop scanning input files */
+
+   if (context->current_group_id == 0)
+     {  /* No groups were fetch from input files - ABORT */
+        return _edje_pick_cleanup(inp_files, out_file,
+              EDJE_PICK_NO_GROUP,
+              NULL, NULL, NULL, NULL, NULL);
+     }
 
    /* Write rest of output */
 
