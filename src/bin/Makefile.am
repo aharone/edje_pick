@@ -13,9 +13,9 @@ AM_CPPFLAGS = \
 -I$(top_srcdir)/src/lib \
 -I$(top_srcdir)/src/include \
 -I$(top_builddir)/src/include \
--I$HOME/e17/efl/src/bin/edje \
--I$HOME/e17/efl/src/lib/edje \
--I$HOME/e17/elementary/src/ \
+-I$(HOME)/e17/efl/src/bin/edje \
+-I$(HOME)/e17/efl/src/lib/edje \
+-I$(HOME)/e17/elementary/src/ \
 -DPACKAGE_BIN_DIR=\"$(bindir)\" \
 -DPACKAGE_LIB_DIR=\"$(libdir)\" \
 -DPACKAGE_DATA_DIR=\"$(datadir)/$(PACKAGE)\" \
