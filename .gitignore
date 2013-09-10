@@ -44,4 +44,3 @@ coverage
 INSTALL
 src/bin/edje_pick
 src/bin/gpick
-m4
