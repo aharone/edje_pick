@@ -1236,6 +1236,7 @@ _undo_bt_clicked(void *data EINA_UNUSED,
      {  /* Commit the actual undo */
         Eina_List *t = _gl_items_list_compose(st->gl_dst, st->list);
         _edje_pick_items_move(g, st->gl_dst, st->gl_src, t, EINA_FALSE);
+        eina_list_free(t);
      }
 }
 
@@ -1255,6 +1256,7 @@ _redo_bt_clicked(void *data EINA_UNUSED,
      {  /* Commit the actual redo */
         Eina_List *t = _gl_items_list_compose(st->gl_src, st->list);
         _edje_pick_items_move(g, st->gl_src, st->gl_dst, t, EINA_FALSE);
+        eina_list_free(t);
      }
 }
 
