@@ -3,7 +3,6 @@
 #endif
 
 #include <Elementary.h>
-#include "edje_private.h"
 #include "Edje_Pick.h"
 
 #define CLIENT_NAME         "Edje-Pick Client"
@@ -50,6 +49,23 @@ struct _gl_item_info
 };
 typedef struct _gl_item_info gl_item_info;
 
+struct _action_st
+{  /* Struct used to implement UNDO, REDO */
+   Evas_Object *gl_src;    /* From what GL it was taken */
+   Evas_Object *gl_dst;    /* To what GL it was taken moved */
+   Eina_List *list;        /* List of gl_item_info for action */
+};
+typedef struct _action_st action_st;
+
+struct _gl_actions
+{  /* For UNDO, REDO */
+   Elm_Object_Item *undo_bt;
+   Elm_Object_Item *redo_bt;
+   Eina_List *act; /* List of action_st structs */
+   unsigned int c; /* Current */
+};
+typedef struct _gl_actions gl_actions;
+
 struct _gui_elements
 {  /* Main window elements */
    Evas_Object *win;
@@ -80,6 +96,8 @@ struct _gui_elements
    Elm_Genlist_Item_Class itc;
    Elm_Genlist_Item_Class itc_group;
    Edje_Pick context;
+
+   gl_actions actions;  /* For UNDO, REDO */
 };
 typedef struct _gui_elements gui_elements;
 
@@ -127,6 +145,22 @@ _gl_data_free(Evas_Object *gl)
      }
 }
 
+static void
+_actions_list_clear(gl_actions *a)
+{
+   action_st *st;
+
+   EINA_LIST_FREE(a->act, st)
+     {
+        eina_list_free(st->list);
+        free(st);
+     }
+
+   a->c = 0;
+   elm_object_item_disabled_set(a->redo_bt, EINA_TRUE);
+   elm_object_item_disabled_set(a->undo_bt, EINA_TRUE);
+}
+
 gui_elements *
 _gui_alloc(void)
 {  /* Will do any complex-allocation proc here */
@@ -134,9 +168,38 @@ _gui_alloc(void)
 }
 
 static void
+_actions_list_add(gl_actions *a, Eina_List *infos,
+      Evas_Object *src, Evas_Object *dst)
+{
+   if (infos)
+     {
+        action_st *st = calloc(1, sizeof(*st));
+        st->list = infos;
+        st->gl_src = src;
+        st->gl_dst = dst;
+
+          {  /* Before append, we trucate any actions after act[c] location */
+             action_st *t = eina_list_nth(a->act, a->c);
+             while (t)
+               {
+                  eina_list_free(t->list);
+                  free(t);
+                  a->act = eina_list_remove(a->act, t);
+                  t = eina_list_nth(a->act, a->c);
+               }
+          }
+
+        a->act = eina_list_append(a->act, st);
+        a->c = eina_list_count(a->act);
+     }
+
+   elm_object_item_disabled_set(a->redo_bt, eina_list_count(a->act));
+   elm_object_item_disabled_set(a->undo_bt, (a->c == 0));
+}
+
+static void
 _gui_free(gui_elements *g)
 {
-
    if (g->file_to_open)
      eina_stringshare_del(g->file_to_open);
 
@@ -151,6 +214,8 @@ _gui_free(gui_elements *g)
 
    _gl_data_free(g->gl_src);
    _gl_data_free(g->gl_dst);
+
+   _actions_list_clear(&(g->actions));
 
    free(g);
 }
@@ -654,6 +719,8 @@ _load_file(Evas_Object *gl,
              _window_setting_update(g);
           }
 
+        /* Clear UNDO / REDO  list each time we load a file */
+        _actions_list_clear(&(g->actions));
         return file_glit;
      }
 
@@ -877,7 +944,8 @@ _list_item_add(gui_elements *g, Evas_Object *gl,
 
 static void
 _leaf_item_move(gui_elements *g,
-      Evas_Object *src, Evas_Object *dst, gl_item_info *info)
+      Evas_Object *src, Evas_Object *dst,
+      gl_item_info *info, Eina_List **plm)
 {
    Elm_Object_Item *it = _glit_node_find(src, info);
    Elm_Object_Item *pit = NULL;
@@ -909,11 +977,15 @@ _leaf_item_move(gui_elements *g,
         gl_item_info *pinfo = elm_object_item_data_get(pit);
         pinfo->sub = eina_list_remove(pinfo->sub, info);
      }
+
+ if (plm)  /* Register this action in UNDO, REDO list */
+   *plm = eina_list_append(*plm, info);
 }
 
 static Eina_List *
 _list_item_move(gui_elements *g, Eina_List *del,
-      Evas_Object *src, Evas_Object *dst, gl_item_info *info)
+      Evas_Object *src, Evas_Object *dst,
+      gl_item_info *info, Eina_List **plm)
 {  /* Remove list-node from source in found and copy all sub-leafs */
    Eina_List *l, *l_next;
    const char *fn = (dst == g->gl_dst) ? (info->file_name) : NULL;
@@ -927,7 +999,7 @@ _list_item_move(gui_elements *g, Eina_List *del,
      }
 
    EINA_LIST_FOREACH_SAFE(info->sub, l, l_next, tmp)
-      _leaf_item_move(g, src, dst, tmp);
+      _leaf_item_move(g, src, dst, tmp, plm);
 
    eina_list_free(info->sub);
    info->sub = NULL;
@@ -946,7 +1018,8 @@ _list_item_move(gui_elements *g, Eina_List *del,
 
 static Eina_List *
 _file_item_move(gui_elements *g, Eina_List *del,
-      Evas_Object *src, Evas_Object *dst, gl_item_info *info)
+      Evas_Object *src, Evas_Object *dst,
+      gl_item_info *info, Eina_List **plm)
 {  /* Remove file-node from source in found and copy all sub-lists */
    Eina_List *l, *l_next;
    gl_item_info *tmp;
@@ -955,7 +1028,7 @@ _file_item_move(gui_elements *g, Eina_List *del,
      elm_object_item_del(it);
 
    EINA_LIST_FOREACH_SAFE(info->sub, l, l_next, tmp)
-      del = _list_item_move(g, del, src, dst, tmp);
+      del = _list_item_move(g, del, src, dst, tmp, plm);
 
    eina_list_free(info->sub);
    info->sub = NULL;
@@ -992,13 +1065,16 @@ _edje_pick_remove_from_parent(Elm_Object_Item *it, Eina_List *del)
 static void
 _edje_pick_items_move(gui_elements *g,
       Evas_Object *src, Evas_Object *dst,
-      Eina_List *s)
+      Eina_List *s, Eina_Bool reg)
 {  /* Move all items in s from src to dest */
    Eina_List *items = NULL;
    Eina_List *l;
    Elm_Object_Item *it;
    gl_item_info *info;
    Eina_List *deleted_infos = NULL;
+   Eina_List *leafs_moved = NULL;  /* Will be used for UNDO / REDO */
+   Eina_List **plm = (reg) ? (&leafs_moved) : NULL;
+
    EINA_LIST_FOREACH(s, l, it)
      {  /* Build a list of all selected-items infos */
         items = eina_list_append(items, elm_object_item_data_get(it));
@@ -1017,14 +1093,14 @@ _edje_pick_items_move(gui_elements *g,
            case EDJE_PICK_TYPE_FILE:
                 {
                    deleted_infos = _file_item_move(g, deleted_infos,
-                         src, dst, info);
+                         src, dst, info, plm);
                    break;
                 }
 
            case EDJE_PICK_TYPE_LIST:
                 {
                    deleted_infos = _list_item_move(g, deleted_infos,
-                         src, dst, info);
+                         src, dst, info, plm);
                    break;
                 }
 
@@ -1033,7 +1109,7 @@ _edje_pick_items_move(gui_elements *g,
            case EDJE_PICK_TYPE_SAMPLE:
            case EDJE_PICK_TYPE_FONT:
                 {
-                   _leaf_item_move(g, src, dst, info);
+                   _leaf_item_move(g, src, dst, info, plm);
                    break;
                 }
 
@@ -1060,11 +1136,14 @@ _edje_pick_items_move(gui_elements *g,
         }
    }
 
-   eina_list_free(deleted_infos);
-   eina_list_free(items);
+ eina_list_free(deleted_infos);
+ eina_list_free(items);
 
-   g->modified = EINA_TRUE;
-   _window_setting_update(g);
+ if (reg)
+   _actions_list_add(&(g->actions), leafs_moved, src, dst);
+
+ g->modified = EINA_TRUE;
+ _window_setting_update(g);
 }
 
 static void
@@ -1097,7 +1176,7 @@ _take_bt_clicked(void *data EINA_UNUSED,
         else
           {  /* Add the selection to dest list */
              printf("\n\nParse OK\n");
-             _edje_pick_items_move(g, g->gl_src, g->gl_dst, s);
+             _edje_pick_items_move(g, g->gl_src, g->gl_dst, s, EINA_TRUE);
           }
         eina_list_free(s);
      }
@@ -1115,11 +1194,68 @@ _remove_bt_clicked(void *data EINA_UNUSED,
 
    if (s)
      {
-        _edje_pick_items_move(g, g->gl_dst, g->gl_src, s);
+        _edje_pick_items_move(g, g->gl_dst, g->gl_src, s, EINA_TRUE);
         eina_list_free(s);
      }
 
    return;
+}
+
+static Eina_List *
+_gl_items_list_compose(Evas_Object *gl, Eina_List *infos)
+{
+   Eina_List *l, *t = NULL;
+   gl_item_info *info;
+   EINA_LIST_FOREACH(infos, l, info)
+     {
+        Elm_Object_Item *it = _glit_node_find(gl, info);
+
+        if (it)
+          t = eina_list_append(t, it);
+        else
+          printf("<%s> Failed to find file_name=<%s> type=<%d> name=<%s>\n",
+                __func__, info->file_name, info->type, info->name);
+     }
+
+   return t;
+}
+
+static void
+_undo_bt_clicked(void *data EINA_UNUSED,
+      Evas_Object *obj EINA_UNUSED, void *event_info EINA_UNUSED)
+{
+   gui_elements *g = data;
+   g->actions.c--;
+   action_st *st = eina_list_nth(g->actions.act, g->actions.c);
+
+   elm_object_item_disabled_set(g->actions.redo_bt,
+         g->actions.c == eina_list_count(g->actions.act));
+
+   elm_object_item_disabled_set(g->actions.undo_bt, (g->actions.c == 0));
+
+     {  /* Commit the actual undo */
+        Eina_List *t = _gl_items_list_compose(st->gl_dst, st->list);
+        _edje_pick_items_move(g, st->gl_dst, st->gl_src, t, EINA_FALSE);
+     }
+}
+
+static void
+_redo_bt_clicked(void *data EINA_UNUSED,
+      Evas_Object *obj EINA_UNUSED, void *event_info EINA_UNUSED)
+{
+   gui_elements *g = data;
+   action_st *st = eina_list_nth(g->actions.act, g->actions.c);
+   g->actions.c++;
+
+   elm_object_item_disabled_set(g->actions.redo_bt,
+         g->actions.c == eina_list_count(g->actions.act));
+
+   elm_object_item_disabled_set(g->actions.undo_bt, (g->actions.c == 0));
+
+     {  /* Commit the actual redo */
+        Eina_List *t = _gl_items_list_compose(st->gl_src, st->list);
+        _edje_pick_items_move(g, st->gl_src, st->gl_dst, t, EINA_FALSE);
+     }
 }
 
 static void
@@ -1341,6 +1477,10 @@ _save_bt_clicked(void *data,
    free(tmp_file_name);
 
    g->modified = EINA_FALSE;
+
+   /* Clear UNDO / REDO  list each time we save file */
+   _actions_list_clear(&(g->actions));
+
    _window_setting_update(g);
 }
 
@@ -1926,7 +2066,7 @@ _gl_dropcb(void *data, Evas_Object *obj,
              else
                {  /* Add the selection to dest list */
                   printf("\n\nParse OK\n");
-                  _edje_pick_items_move(g, df, obj, s);
+                  _edje_pick_items_move(g, df, obj, s, EINA_TRUE);
                }
 
              eina_list_free(s);
@@ -2096,10 +2236,15 @@ main(int argc, char **argv)
          _remove_bt_clicked, gui);
    elm_toolbar_item_selected_set(tb_it, EINA_FALSE);
 
-   tb_it = elm_toolbar_item_append(gui->tb, NULL, "UNDO", NULL, NULL);
-   elm_toolbar_item_selected_set(tb_it, EINA_FALSE);
-   tb_it = elm_toolbar_item_append(gui->tb, NULL, "REDO", NULL, NULL);
-   elm_toolbar_item_selected_set(tb_it, EINA_FALSE);
+   gui->actions.undo_bt = elm_toolbar_item_append(gui->tb, NULL, "UNDO",
+         _undo_bt_clicked, gui);
+   elm_object_item_disabled_set(gui->actions.undo_bt, EINA_TRUE);
+   elm_toolbar_item_selected_set(gui->actions.undo_bt, EINA_FALSE);
+
+   gui->actions.redo_bt = elm_toolbar_item_append(gui->tb, NULL, "REDO",
+         _redo_bt_clicked, gui);
+   elm_object_item_disabled_set(gui->actions.redo_bt, EINA_TRUE);
+   elm_toolbar_item_selected_set(gui->actions.redo_bt, EINA_FALSE);
 
    elm_box_pack_end(gui->bx, gui->tb);
    evas_object_show(gui->tb);
@@ -2137,10 +2282,6 @@ main(int argc, char **argv)
    evas_object_smart_callback_add(gui->win, "delete,request", _client_win_del, gui);
 printf("<%s> gl_src=<%p>, gl_dst=<%p>\n", __func__, gui->gl_src, gui->gl_dst);
 
-   ecore_init();
-   eina_init();
-   eet_init();
-   _edje_edd_init();
    _window_setting_update(gui);
 
    elm_run();
@@ -2148,8 +2289,6 @@ printf("<%s> gl_src=<%p>, gl_dst=<%p>\n", __func__, gui->gl_src, gui->gl_dst);
    _edje_pick_context_set(NULL);
 
    /* cleanup - free files data */
-   _edje_edd_shutdown();
-   eet_shutdown();
    elm_shutdown();
 
    return 0;
