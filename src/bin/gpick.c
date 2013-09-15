@@ -707,6 +707,7 @@ _load_file(Evas_Object *gl,
         elm_genlist_item_expanded_set(groups_glit, EINA_TRUE);
 
         eina_iterator_free(i);
+        _edje_cache_file_unref(edf);
         eet_close(ef);
 
         if (gl == g->gl_dst)
