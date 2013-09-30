@@ -95,7 +95,7 @@ struct _gui_elements
    Evas_Object *gl_dst;
    Elm_Genlist_Item_Class itc;
    Elm_Genlist_Item_Class itc_group;
-   Edje_Pick context;
+   Edje_Pick *context;
 
    gl_actions actions;  /* For UNDO, REDO */
 };
@@ -164,7 +164,9 @@ _actions_list_clear(gl_actions *a)
 gui_elements *
 _gui_alloc(void)
 {  /* Will do any complex-allocation proc here */
-   return calloc(1, sizeof(gui_elements));
+   gui_elements *g = calloc(1, sizeof(gui_elements));
+   g->context = edje_pick_context_new();
+   return g;
 }
 
 static void
@@ -217,6 +219,7 @@ _gui_free(gui_elements *g)
 
    _actions_list_clear(&(g->actions));
 
+   edje_pick_context_free(g->context);
    free(g);
 }
 
@@ -579,7 +582,8 @@ _cancel_popup(void *data, Evas_Object *obj EINA_UNUSED, void *event_info EINA_UN
 }
 
 static void
-_ok_popup_show(gui_elements *g, Evas_Smart_Cb func, char *title, char *err)
+_ok_popup_show(gui_elements *g,
+      Evas_Smart_Cb func, char *title, const char *err)
 {
    g->popup = elm_popup_add(g->win);
    evas_object_size_hint_weight_set(g->popup,
@@ -610,59 +614,23 @@ _load_file(Evas_Object *gl,
 
    if (file_name)
      {  /* Got file name, read goupe names and add to genlist */
-        Edje_File *edf;
-        Eina_Iterator *i;
         char *name = NULL;
         Elm_Object_Item *file_glit = NULL;
         Elm_Object_Item *groups_glit = NULL;
         gl_item_info *file_info = NULL;
         gl_item_info *group_info = NULL;
-        char *err = NULL;
-        Eet_File *ef = eet_open(file_name, EET_FILE_MODE_READ);
-        if (!ef)
+        const char *err = NULL;
+        Eina_List *l;
+        Eina_List *gr = NULL;
+
+        int s = edje_pick_file_info_read(file_name, &gr);
+        if (s != EDJE_PICK_NO_ERROR)
           {
-#define F_OPEN_ERR "Failed to open file '%s'"
-             err = malloc(strlen(F_OPEN_ERR) +
-                   strlen(file_name) + 1);
-
-             sprintf(err, F_OPEN_ERR, file_name);
+             eina_list_free(gr);
+             err = edje_pick_err_str_get(s);
+             printf("<%s> %s <%s>\n" ,__func__, err, file_name);
              _ok_popup_show(data, _cancel_popup, "File Error", err);
-             free(err);
-             printf("<%s> Failed to open file <%s>\n", __func__, file_name);
              return file_glit;
-#undef F_OPEN_ERR
-          }
-
-        edf = eet_data_read(ef, _edje_edd_edje_file, "edje/file");
-        if (!edf)
-          {
-#define F_READ_ERR "Failed to read file '%s'"
-             eet_close(ef);
-             err = malloc(strlen(F_READ_ERR) +
-                   strlen(file_name) + 1);
-
-             sprintf(err, F_READ_ERR, file_name);
-             _ok_popup_show(data, _cancel_popup, "File Error", err);
-             free(err);
-             printf("<%s> Failed to read file <%s>\n", __func__, file_name);
-             return file_glit;
-#undef F_READ_ERR
-          }
-
-        if (!(edf->collection))
-          {  /* This will handle the case of empty, corrupted file */
-#define F_COLLECT_ERR "File collection is empty (corrupted?) '%s'"
-             eet_close(ef);
-             err = malloc(strlen(F_COLLECT_ERR) +
-                   strlen(file_name) + 1);
-
-             sprintf(err, F_COLLECT_ERR, file_name);
-             _ok_popup_show(data, _cancel_popup, "File Error", err);
-             free(err);
-             printf("<%s> File collection is empty (corrupted?) <%s>\n"
-                   ,__func__, file_name);
-             return file_glit;
-#undef F_COLLECT_ERR
           }
 
         if (gl == g->gl_src)
@@ -673,8 +641,7 @@ _load_file(Evas_Object *gl,
              file_info->name = eina_stringshare_add(file_name);
           }
 
-        i = eina_hash_iterator_key_new(edf->collection);
-        EINA_ITERATOR_FOREACH(i, name)
+        EINA_LIST_FOREACH(gr, l, name)
           {  /* Create all groups (if any) as children */
              if (!group_info)
                {
@@ -706,9 +673,7 @@ _load_file(Evas_Object *gl,
 
         elm_genlist_item_expanded_set(groups_glit, EINA_TRUE);
 
-        eina_iterator_free(i);
-        _edje_cache_file_unref(edf);
-        eet_close(ef);
+        eina_list_free(gr);
 
         if (gl == g->gl_dst)
           {
@@ -1163,16 +1128,16 @@ _take_bt_clicked(void *data EINA_UNUSED,
         char **argv = _command_line_args_make(g, s, g->argv0,
               "/tmp/out.tmp", &argc, EINA_TRUE);
 
-        _edje_pick_context_set(&g->context);
-        status = _edje_pick_command_line_parse(argc, argv,
+        edje_pick_context_set(g->context);
+        status = edje_pick_command_line_parse(argc, argv,
               NULL, NULL, EINA_TRUE);
 
         free(argv);
         if (status != EDJE_PICK_NO_ERROR)
           {  /* Parse came back with an error */
-             printf("%s\n", _edje_pick_err_str_get(status));
+             printf("%s\n", edje_pick_err_str_get(status));
              _ok_popup_show(data, _cancel_popup, "Error",
-                   (char *) _edje_pick_err_str_get(status));
+                   (char *) edje_pick_err_str_get(status));
           }
         else
           {  /* Add the selection to dest list */
@@ -1449,14 +1414,14 @@ _save_bt_clicked(void *data,
    argv = _command_line_args_make(g, NULL, g->argv0, tmp_file_name, &argc,
          EINA_FALSE);
 
-   _edje_pick_context_set(&g->context);
-   i = _edje_pick_process(argc, argv);
+   edje_pick_context_set(g->context);
+   i = edje_pick_process(argc, argv);
    free(argv);
 
    if (i != EDJE_PICK_NO_ERROR)
      {
         _ok_popup_show(data, _cancel_popup, "Save Failed",
-              (char *) _edje_pick_err_str_get(i));
+              (char *) edje_pick_err_str_get(i));
 
         free(tmp_file_name);
         return;
@@ -1505,14 +1470,14 @@ _save_as_bt_do(void *data, Evas_Object *obj EINA_UNUSED, void *event_info)
         argv = _command_line_args_make(g, NULL, g->argv0, event_info, &argc,
               EINA_FALSE);
 
-        _edje_pick_context_set(&g->context);
-        i = _edje_pick_process(argc, argv);
+        edje_pick_context_set(g->context);
+        i = edje_pick_process(argc, argv);
         free(argv);
 
         if (i != EDJE_PICK_NO_ERROR)
           {
              _ok_popup_show(data, _cancel_popup, "Save as Failed",
-                   (char *) _edje_pick_err_str_get(i));
+                   (char *) edje_pick_err_str_get(i));
              return;
           }
 
@@ -2053,8 +2018,8 @@ _gl_dropcb(void *data, Evas_Object *obj,
                   char **argv = _command_line_args_make(g, s, g->argv0,
                         "/tmp/out.tmp", &argc, EINA_TRUE);
 
-                  _edje_pick_context_set(&g->context);
-                  status = _edje_pick_command_line_parse(argc, argv,
+                  edje_pick_context_set(g->context);
+                  status = edje_pick_command_line_parse(argc, argv,
                         NULL, NULL, EINA_TRUE);
 
                   free(argv);
@@ -2062,9 +2027,9 @@ _gl_dropcb(void *data, Evas_Object *obj,
 
              if (status != EDJE_PICK_NO_ERROR)
                {  /* Parse came back with an error */
-                  printf("%s\n", _edje_pick_err_str_get(status));
+                  printf("%s\n", edje_pick_err_str_get(status));
                   _ok_popup_show(data, _cancel_popup, "Drop Error",
-                        (char *) _edje_pick_err_str_get(status));
+                        (char *) edje_pick_err_str_get(status));
                }
              else
                {  /* Add the selection to dest list */
@@ -2287,9 +2252,11 @@ printf("<%s> gl_src=<%p>, gl_dst=<%p>\n", __func__, gui->gl_src, gui->gl_dst);
 
    _window_setting_update(gui);
 
+   edje_pick_init();
    elm_run();
+   edje_pick_shutdown();
 
-   _edje_pick_context_set(NULL);
+   edje_pick_context_set(NULL);
 
    /* cleanup - free files data */
    elm_shutdown();

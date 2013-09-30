@@ -91,7 +91,6 @@ AC_CONFIG_FILES([
 edje_pick.pc
 Makefile
 src/Makefile
-src/lib/Makefile
 src/bin/Makefile
 icons/Makefile
 ])
