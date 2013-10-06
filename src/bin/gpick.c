@@ -45,6 +45,7 @@ struct _gl_item_info
    const char *file_name;  /* From what file it comes */
    Edje_Pick_Type type;    /* Specifys what type of data struct contains */
    const char *name;       /* Item name to display */
+   void *ex;               /* Extra info for this item */
    Eina_List *sub;         /* Not NULL for item represent head of tree */
 };
 typedef struct _gl_item_info gl_item_info;
@@ -102,6 +103,27 @@ struct _gui_elements
 typedef struct _gui_elements gui_elements;
 
 static void
+_gl_item_ex_free(void *ex, Edje_Pick_Type type)
+{
+   if (ex)
+     {
+        switch(type)
+          {
+           case EDJE_PICK_TYPE_SAMPLE:
+           case EDJE_PICK_TYPE_IMAGE:
+                {
+                   break;
+                }
+
+           default:
+             break;
+          }
+
+        free(ex);
+     }
+}
+
+static void
 _gl_item_data_free(gl_item_info *info)
 {  /* Free genlist item info, and remove from head list or free sub-items */
    if (!info)
@@ -120,6 +142,7 @@ _gl_item_data_free(gl_item_info *info)
           }
      }
 
+   _gl_item_ex_free(info->ex, info->type);
    eina_stringshare_del(info->file_name);
    eina_stringshare_del(info->name);
    free(info);
@@ -603,6 +626,121 @@ _ok_popup_show(gui_elements *g,
    evas_object_show(g->popup);
 }
 
+static gl_item_info *
+_groups_get(Eina_List *grp, const char *file_name)
+{
+   gl_item_info *list_info = NULL;
+   gl_item_info *child;
+   Eina_List *l;
+   const char *name;
+
+   EINA_LIST_FOREACH(grp, l, name)
+     {
+        if (!list_info)
+          {
+             list_info = calloc(1, sizeof(gl_item_info));
+             list_info->file_name = eina_stringshare_add(file_name);
+             list_info->type = EDJE_PICK_TYPE_LIST;
+             list_info->name = eina_stringshare_add(EDJE_PICK_GROUPS_STR);
+          }
+
+        child = calloc(1, sizeof(gl_item_info));
+        child->file_name = eina_stringshare_add(file_name);
+        child->type = EDJE_PICK_TYPE_GROUP;
+        child->name = eina_stringshare_add(name);
+        list_info->sub = eina_list_append(list_info->sub, child);
+     }
+
+   return list_info;
+}
+
+static gl_item_info *
+_images_get(Eina_List *img, const char *file_name)
+{
+   gl_item_info *list_info = NULL;
+   gl_item_info *child;
+   Eina_List *l;
+   image_info_ex *ex;
+
+   EINA_LIST_FOREACH(img, l, ex)
+     {
+        if (!list_info)
+          {
+             list_info = calloc(1, sizeof(gl_item_info));
+             list_info->file_name = eina_stringshare_add(file_name);
+             list_info->type = EDJE_PICK_TYPE_LIST;
+             list_info->name = eina_stringshare_add(EDJE_PICK_IMAGES_STR);
+          }
+
+        child = calloc(1, sizeof(gl_item_info));
+        child->file_name = eina_stringshare_add(file_name);
+        child->type = EDJE_PICK_TYPE_IMAGE;
+        child->name = eina_stringshare_add(ex->name);
+        child->ex = ex;
+        list_info->sub = eina_list_append(list_info->sub, child);
+     }
+
+   return list_info;
+}
+
+static gl_item_info *
+_samples_get(Eina_List *smp, const char *file_name)
+{
+   gl_item_info *list_info = NULL;
+   gl_item_info *child;
+   Eina_List *l;
+   image_info_ex *ex;
+
+   EINA_LIST_FOREACH(smp, l, ex)
+     {
+        if (!list_info)
+          {
+             list_info = calloc(1, sizeof(gl_item_info));
+             list_info->file_name = eina_stringshare_add(file_name);
+             list_info->type = EDJE_PICK_TYPE_LIST;
+             list_info->name = eina_stringshare_add(EDJE_PICK_SAMPLES_STR);
+          }
+
+        child = calloc(1, sizeof(gl_item_info));
+        child->file_name = eina_stringshare_add(file_name);
+        child->type = EDJE_PICK_TYPE_SAMPLE;
+        child->name = eina_stringshare_add(ex->name);
+        child->ex = ex;
+        list_info->sub = eina_list_append(list_info->sub, child);
+     }
+
+   return list_info;
+}
+
+static gl_item_info *
+_fonts_get(Eina_List *fnt, const char *file_name)
+{
+   gl_item_info *list_info = NULL;
+   gl_item_info *child;
+   Eina_List *l;
+   font_info_ex *ex;
+
+   EINA_LIST_FOREACH(fnt, l, ex)
+     {
+        if (!list_info)
+          {
+             list_info = calloc(1, sizeof(gl_item_info));
+             list_info->file_name = eina_stringshare_add(file_name);
+             list_info->type = EDJE_PICK_TYPE_LIST;
+             list_info->name = eina_stringshare_add(EDJE_PICK_FONTS_STR);
+          }
+
+        child = calloc(1, sizeof(gl_item_info));
+        child->file_name = eina_stringshare_add(file_name);
+        child->type = EDJE_PICK_TYPE_FONT;
+        child->name = eina_stringshare_add(ex->name);
+        child->ex = ex;
+        list_info->sub = eina_list_append(list_info->sub, child);
+     }
+
+   return list_info;
+}
+
 static Elm_Object_Item *
 _load_file(Evas_Object *gl,
       Elm_Genlist_Item_Class *itc_group,
@@ -614,19 +752,24 @@ _load_file(Evas_Object *gl,
 
    if (file_name)
      {  /* Got file name, read goupe names and add to genlist */
-        char *name = NULL;
         Elm_Object_Item *file_glit = NULL;
-        Elm_Object_Item *groups_glit = NULL;
-        gl_item_info *file_info = NULL;
-        gl_item_info *group_info = NULL;
-        const char *err = NULL;
-        Eina_List *l;
-        Eina_List *gr = NULL;
 
-        int s = edje_pick_file_info_read(file_name, &gr);
+        gl_item_info *file_info = NULL;
+        gl_item_info *groups_info = NULL;
+        gl_item_info *images_info = NULL;
+        gl_item_info *samples_info = NULL;
+        gl_item_info *fonts_info = NULL;
+
+        const char *err = NULL;
+        Eina_List *grp = NULL;  /* Groups  info list */
+        Eina_List *img = NULL;  /* Images  info list */
+        Eina_List *smp = NULL;  /* Sampels info list */
+        Eina_List *fnt = NULL;  /* Fonts info list   */
+
+        int s = edje_pick_file_info_read(file_name, &grp, &img, &smp, &fnt);
         if (s != EDJE_PICK_NO_ERROR)
           {
-             eina_list_free(gr);
+             eina_list_free(grp);
              err = edje_pick_err_str_get(s);
              printf("<%s> %s <%s>\n" ,__func__, err, file_name);
              _ok_popup_show(data, _cancel_popup, "File Error", err);
@@ -641,39 +784,63 @@ _load_file(Evas_Object *gl,
              file_info->name = eina_stringshare_add(file_name);
           }
 
-        EINA_LIST_FOREACH(gr, l, name)
-          {  /* Create all groups (if any) as children */
-             if (!group_info)
-               {
-                  group_info = calloc(1, sizeof(gl_item_info));
-                  group_info->file_name = eina_stringshare_add(file_name);
-                  group_info->type = EDJE_PICK_TYPE_LIST;
-                  group_info->name = eina_stringshare_add(EDJE_PICK_GROUPS_STR);
-               }
-
-             gl_item_info *child = calloc(1, sizeof(gl_item_info));
-             child->file_name = eina_stringshare_add(file_name);
-             child->type = EDJE_PICK_TYPE_GROUP;
-             child->name = eina_stringshare_add(name);
-             group_info->sub = eina_list_append(group_info->sub, child);
-          }
+        groups_info = _groups_get(grp, file_name);
+        images_info = _images_get(img, file_name);
+        samples_info = _samples_get(smp, file_name);
+        fonts_info = _fonts_get(fnt, file_name);
 
         if (file_info)
           {  /* only if gl is gl_src */
-             file_info->sub = eina_list_append(file_info->sub, group_info);
+             if (groups_info)
+               file_info->sub = eina_list_append(file_info->sub, groups_info);
+
+             if (images_info)
+               file_info->sub = eina_list_append(file_info->sub, images_info);
+
+             if (samples_info)
+               file_info->sub = eina_list_append(file_info->sub, samples_info);
+
+             if (fonts_info)
+               file_info->sub = eina_list_append(file_info->sub, fonts_info);
+
              file_glit = elm_genlist_item_append(gl, itc_group,
                    file_info, NULL,
                    ELM_GENLIST_ITEM_GROUP, NULL, NULL);
           }
 
-        if (group_info)
-          groups_glit = elm_genlist_item_append(gl, itc,
-                group_info, file_glit,
-                ELM_GENLIST_ITEM_TREE, NULL, NULL);
+        if (groups_info)
+          {
+             elm_genlist_item_append(gl, itc,
+                   groups_info, file_glit,
+                   ELM_GENLIST_ITEM_TREE, NULL, NULL);
+          }
 
-        elm_genlist_item_expanded_set(groups_glit, EINA_TRUE);
+        if (images_info)
+          {
+             elm_genlist_item_append(gl, itc,
+                   images_info, file_glit,
+                   ELM_GENLIST_ITEM_TREE, NULL, NULL);
+          }
 
-        eina_list_free(gr);
+        if (samples_info)
+          {
+             elm_genlist_item_append(gl, itc,
+                   samples_info, file_glit,
+                   ELM_GENLIST_ITEM_TREE, NULL, NULL);
+          }
+
+        if (fonts_info)
+          {
+             elm_genlist_item_append(gl, itc,
+                   fonts_info, file_glit,
+                   ELM_GENLIST_ITEM_TREE, NULL, NULL);
+          }
+
+
+        eina_list_free(grp);
+        eina_list_free(img);
+        eina_list_free(smp);
+        eina_list_free(fnt);
 
         if (gl == g->gl_dst)
           {
@@ -792,9 +959,8 @@ _command_line_args_make(gui_elements *g, Eina_List *s,
           }
      }
 
-   EINA_LIST_FOREACH(s, l, it)
+   EINA_LIST_FOREACH(s, l, info)
      {  /* Run through selected-items and build args-list */
-        info = elm_object_item_data_get(it);
         switch(info->type)
           {
            case EDJE_PICK_TYPE_FILE:
@@ -873,7 +1039,6 @@ _file_item_add(gui_elements *g, Evas_Object *gl, const char *file)
          head, NULL,
          ELM_GENLIST_ITEM_GROUP, NULL, NULL);
 
-   elm_genlist_item_expanded_set(it, EINA_TRUE);
    return it;
 }
 
@@ -897,14 +1062,12 @@ _list_item_add(gui_elements *g, Evas_Object *gl,
 
         file_info = elm_object_item_data_get(file_glit);
         file_info->sub = eina_list_append(file_info->sub, group_head);
-        elm_genlist_item_update(file_glit);
      }
 
    it = elm_genlist_item_append(gl, &(g->itc),
          group_head, file_glit,
          EINA_TRUE, NULL, NULL);
 
-   elm_genlist_item_expanded_set(it, EINA_TRUE);
    return it;
 }
 
@@ -927,21 +1090,35 @@ _leaf_item_move(gui_elements *g,
 
         list_info = elm_object_item_data_get(ithd);
         list_info->sub = eina_list_append(list_info->sub, info);
-        elm_genlist_item_append(dst, &(g->itc), info, ithd,
-              ELM_GENLIST_ITEM_NONE, NULL, NULL);
-        elm_genlist_item_update(ithd);
+        if (elm_genlist_item_expanded_get(ithd))
+          {
+             elm_genlist_item_append(dst, &(g->itc), info, ithd,
+                   ELM_GENLIST_ITEM_NONE, NULL, NULL);
+             elm_genlist_item_update(ithd);
+          }
      }
 
+
    if (it)
-     {
+     {  /* Will find it only if displayed, not show do 'else' clause */
         pit = elm_genlist_item_parent_get(it);
         elm_object_item_del(it);
+     }
+   else
+     {  /* We have to locate parent, even when leaf contracted (not shown) */
+        if (_gl_data_find(src, info->file_name, info->type, info->name))
+          {  /* find apropriate list-data */
+             char *list_str = _list_string_get(info->type);
+             pit = _glit_head_list_node_find(src, info->file_name, list_str);
+          }
      }
 
    if (pit)
      {
         gl_item_info *pinfo = elm_object_item_data_get(pit);
         pinfo->sub = eina_list_remove(pinfo->sub, info);
+        if (elm_genlist_item_expanded_get(pit))
+          elm_genlist_item_update(pit);
      }
 
  if (plm)  /* Register this action in UNDO, REDO list */
@@ -1033,18 +1210,13 @@ _edje_pick_items_move(gui_elements *g,
       Evas_Object *src, Evas_Object *dst,
       Eina_List *s, Eina_Bool reg)
 {  /* Move all items in s from src to dest */
-   Eina_List *items = NULL;
+   Eina_List *items = eina_list_clone(s);
    Eina_List *l;
    Elm_Object_Item *it;
    gl_item_info *info;
    Eina_List *deleted_infos = NULL;
    Eina_List *leafs_moved = NULL;  /* Will be used for UNDO / REDO */
    Eina_List **plm = (reg) ? (&leafs_moved) : NULL;
-
-   EINA_LIST_FOREACH(s, l, it)
-     {  /* Build a list of all selected-items infos */
-        items = eina_list_append(items, elm_object_item_data_get(it));
-     }
 
    /* Sort items so files are first */
    items = eina_list_sort(items, eina_list_count(items), _item_type_cmp);
@@ -1117,8 +1289,15 @@ _take_bt_clicked(void *data EINA_UNUSED,
       Evas_Object *obj EINA_UNUSED, void *event_info EINA_UNUSED)
 {  /* Copy selected items */
    gui_elements *g = data;
+   Elm_Object_Item *it;
+   Eina_List *l;
+   Eina_List *s = NULL;
+   const Eina_List *slct = elm_genlist_selected_items_get(g->gl_src);
 
-   Eina_List *s = eina_list_clone(elm_genlist_selected_items_get(g->gl_src));
+   EINA_LIST_FOREACH((Eina_List *) slct, l, it)
+     {  /* Build a list of all selected-items infos */
+        s = eina_list_append(s, elm_object_item_data_get(it));
+     }
 
    /* First check OK to move groups */
    if (s)
@@ -1155,8 +1334,15 @@ _remove_bt_clicked(void *data EINA_UNUSED,
       Evas_Object *obj EINA_UNUSED, void *event_info EINA_UNUSED)
 {  /* Remove selected files, groups */
    gui_elements *g = data;
+   Elm_Object_Item *it;
+   Eina_List *l;
+   Eina_List *s = NULL;
+   const Eina_List *slct = elm_genlist_selected_items_get(g->gl_dst);
 
-   Eina_List *s = eina_list_clone(elm_genlist_selected_items_get(g->gl_dst));
+   EINA_LIST_FOREACH((Eina_List *) slct, l, it)
+     {  /* Build a list of all selected-items infos */
+        s = eina_list_append(s, elm_object_item_data_get(it));
+     }
 
    if (s)
      {
@@ -1165,25 +1351,6 @@ _remove_bt_clicked(void *data EINA_UNUSED,
      }
 
    return;
-}
-
-static Eina_List *
-_gl_items_list_compose(Evas_Object *gl, Eina_List *infos)
-{
-   Eina_List *l, *t = NULL;
-   gl_item_info *info;
-   EINA_LIST_FOREACH(infos, l, info)
-     {
-        Elm_Object_Item *it = _glit_node_find(gl, info);
-
-        if (it)
-          t = eina_list_append(t, it);
-        else
-          printf("<%s> Failed to find file_name=<%s> type=<%d> name=<%s>\n",
-                __func__, info->file_name, info->type, info->name);
-     }
-
-   return t;
 }
 
 static void
@@ -1200,7 +1367,7 @@ _undo_bt_clicked(void *data EINA_UNUSED,
    elm_object_item_disabled_set(g->actions.undo_bt, (g->actions.c == 0));
 
      {  /* Commit the actual undo */
-        Eina_List *t = _gl_items_list_compose(st->gl_dst, st->list);
+        Eina_List *t = eina_list_clone(st->list);
         _edje_pick_items_move(g, st->gl_dst, st->gl_src, t, EINA_FALSE);
         eina_list_free(t);
      }
@@ -1220,7 +1387,7 @@ _redo_bt_clicked(void *data EINA_UNUSED,
    elm_object_item_disabled_set(g->actions.undo_bt, (g->actions.c == 0));
 
      {  /* Commit the actual redo */
-        Eina_List *t = _gl_items_list_compose(st->gl_src, st->list);
+        Eina_List *t = eina_list_clone(st->list);
         _edje_pick_items_move(g, st->gl_src, st->gl_dst, t, EINA_FALSE);
         eina_list_free(t);
      }
@@ -1997,7 +2164,8 @@ _gl_dropcb(void *data, Evas_Object *obj,
                                (df, file_name, type, name);
 
                             if (glit)
-                              s = eina_list_append(s, glit);
+                              s = eina_list_append(s,
+                                    elm_object_item_data_get(glit));
                          }
                     }
                   else
@@ -2216,8 +2384,6 @@ main(int argc, char **argv)
 
    elm_box_pack_end(gui->bx, gui->tb);
    evas_object_show(gui->tb);
-
-//   top_panel_create(gui);
 
    gui->panes = elm_panes_add(gui->bx);
    evas_object_size_hint_weight_set(gui->panes, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
