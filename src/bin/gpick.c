@@ -7,8 +7,8 @@
 
 #define CLIENT_NAME         "Edje-Pick Client"
 
-#define DRAG_TIMEOUT 0.3
-#define ANIM_TIME 0.5
+#define EDJE_PICK_DRAG_TIMEOUT 0.3
+#define EDJE_PICK_ANIM_TIME 0.5
 
 #define EDJE_PICK_SYS_DND_PREFIX  "file://"
 #define EDJE_PICK_SYS_DND_POSTFIX "></item>"
@@ -20,6 +20,12 @@
 #define EDJE_PICK_FONTS_STR   "Fonts"
 
 #define EDJE_PICK_NEW_FILE_NAME_STR "Untitled"
+
+#define EDJE_PICK_PREVIEW_TIMEOUT 0.5
+#define EDJE_PICK_PREVIEW_ANIM 0.05
+
+static Eina_Bool _image_preview_timeout(void *data);
+
 enum _Edje_Pick_Type
 {
    EDJE_PICK_TYPE_UNDEF,  /* 0 - if not intialized */
@@ -31,6 +37,32 @@ enum _Edje_Pick_Type
    EDJE_PICK_TYPE_FONT    /* Node contains a font name */
 };
 typedef enum _Edje_Pick_Type Edje_Pick_Type;
+
+enum _Edje_Pick_Preview_Status
+{
+   EDJE_PICK_PREVIEW_START,    /* Preview window appears         */
+   EDJE_PICK_PREVIEW_BLOW,     /* Preview window grows in size   */
+   EDJE_PICK_PREVIEW_SHRINK,   /* Preview window shrinks in size */
+   EDJE_PICK_PREVIEW_STABLE,   /* Preview window at max-size     */
+   EDJE_PICK_PREVIEW_END,      /* Preview window closed          */
+   EDJE_PICK_PREVIEW_DETACHED  /* Preview window was detached    */
+};
+typedef enum _Edje_Pick_Preview_Status Edje_Pick_Preview_Status;
+
+struct _image_preview_st
+{
+   Ecore_Timer *tm;
+   Evas_Object *icon;    /* Pointer to original icon, used on create only */
+   Evas_Object *ic;      /* Preview icon in bt */
+   Evas_Object *bt;
+   Edje_Pick_Preview_Status status;
+   double min_size;
+   unsigned int x;       /* Center point of preview window (x) */
+   unsigned int y;       /* Center point of preview window (y) */
+   unsigned int w;       /* Width of target raw-image  */
+   unsigned int h;       /* Hieght of target raw-image */
+};
+typedef struct _image_preview_st image_preview_st;
 
 /* gl info as follows:
    file_name = full-path file name for all nodes.
@@ -46,6 +78,7 @@ struct _gl_item_info
    Edje_Pick_Type type;    /* Specifys what type of data struct contains */
    const char *name;       /* Item name to display */
    void *ex;               /* Extra info for this item */
+   void *preview;          /* Will point to a preview struct if alloc */
    Eina_List *sub;         /* Not NULL for item represent head of tree */
 };
 typedef struct _gl_item_info gl_item_info;
@@ -103,6 +136,49 @@ struct _gui_elements
 typedef struct _gui_elements gui_elements;
 
 static void
+_image_preview_close(image_preview_st *st)
+{
+   if (st->tm)
+     ecore_timer_del(st->tm);
+
+   if (st->ic)
+     evas_object_del(st->ic);
+
+   if (st->bt)
+     evas_object_del(st->bt);
+
+   st->tm = st->ic = st->bt = NULL;
+}
+
+static void *
+_gl_item_preview_free(void *p, Edje_Pick_Type type)
+{
+   if (p)
+     {
+        switch(type)
+          {
+           case EDJE_PICK_TYPE_SAMPLE:
+                {
+                   break;
+                }
+
+           case EDJE_PICK_TYPE_IMAGE:
+                {
+                   _image_preview_close(p);
+                   break;
+                }
+
+           default:
+              break;
+          }
+
+        free(p);
+     }
+
+   return NULL;
+}
+
+static void *
 _gl_item_ex_free(void *ex, Edje_Pick_Type type)
 {
    if (ex)
@@ -121,6 +197,8 @@ _gl_item_ex_free(void *ex, Edje_Pick_Type type)
 
         free(ex);
      }
+
+   return NULL;
 }
 
 static void
@@ -142,7 +220,8 @@ _gl_item_data_free(gl_item_info *info)
           }
      }
 
-   _gl_item_ex_free(info->ex, info->type);
+   info->preview = _gl_item_preview_free(info->preview, info->type);
+   info->ex = _gl_item_ex_free(info->ex, info->type);
    eina_stringshare_del(info->file_name);
    eina_stringshare_del(info->name);
    free(info);
@@ -276,6 +355,248 @@ _group_item_text_get(void *data, Evas_Object *obj EINA_UNUSED,
    return s;
 }
 
+static Eina_Bool
+_edje_pick_image_object_data_read(Evas_Object *o,
+      image_info_ex *ex, const char *file_name,
+      unsigned int *w, unsigned int *h)
+{
+   void *img;
+   int alpha;
+   int compression;
+   int quality;
+   int lossy;
+   Eet_File *ef = eet_open(file_name, EET_FILE_MODE_READ);
+
+   if (ef)
+     {
+        char buf[1024];
+        snprintf(buf, sizeof(buf), "edje/images/%i", ex->id);
+        img = eet_data_image_read(ef,
+              buf,
+              w,
+              h,
+              &alpha,
+              &compression,
+              &quality,
+              &lossy);
+
+        if (img)
+          {
+             evas_object_size_hint_min_set(o, *w, *h);
+             evas_object_image_colorspace_set(o, EVAS_COLORSPACE_ARGB8888);
+             evas_object_image_alpha_set(o, EINA_FALSE);
+             evas_object_image_size_set(o, *w, *h);
+             evas_object_image_data_copy_set(o, img);
+             evas_object_image_data_update_add(o, 0, 0, *w, *h);
+             evas_object_show(o);
+             return EINA_TRUE;
+          }
+     }
+
+   return EINA_FALSE;
+}
+
+static void
+_preview_win_del(void *data,
+      Evas_Object *obj EINA_UNUSED, void *event_info EINA_UNUSED)
+{  /* called when client window is deleted */
+   gl_item_info *info = data;
+   image_preview_st *st = info->preview;
+   st->status = EDJE_PICK_PREVIEW_START;
+}
+
+static void
+_preview_open(gl_item_info *info)
+{  /* Open full-blown image-preview window */
+   unsigned int w, h;
+   image_preview_st *st = info->preview;
+   st->status = EDJE_PICK_PREVIEW_DETACHED;
+   Evas_Object *win = elm_win_util_standard_add("Image Preview", info->name);
+
+   Evas_Object *im = elm_image_add(win);
+   Evas_Object *img = elm_image_object_get(im);
+   if (_edje_pick_image_object_data_read(img, info->ex,
+            info->file_name, &w, &h))
+
+   elm_win_autodel_set(win, EINA_TRUE);
+   evas_object_smart_callback_add(win, "delete,request", _preview_win_del, info);
+
+   evas_object_size_hint_weight_set(im, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
+   evas_object_size_hint_align_set(im, EVAS_HINT_FILL, EVAS_HINT_FILL);
+   evas_object_size_hint_min_set(im, w, h);
+   elm_win_resize_object_add(win, im);
+   evas_object_resize(win, w, h);
+
+   evas_object_show(img);
+   evas_object_show(im);
+   evas_object_show(win);
+}
+
+static void
+_preview_clicked(void *data, Evas_Object *obj EINA_UNUSED, void *event_info EINA_UNUSED)
+{
+   gl_item_info *info = data;
+   _image_preview_close(info->preview);
+   _preview_open(info);
+}
+
+static void
+_preview_mouse_out_cb(void *data,
+               Evas *e __UNUSED__,
+               Evas_Object *obj __UNUSED__,
+               void *event_info __UNUSED__)
+{
+   gl_item_info *info = data;
+   image_preview_st *st = info->preview;
+   if (st->status != EDJE_PICK_PREVIEW_DETACHED)
+     {
+        st->status = EDJE_PICK_PREVIEW_SHRINK;
+        st->tm = ecore_timer_add(EDJE_PICK_PREVIEW_ANIM,
+              _image_preview_timeout, info);
+     }
+}
+
+static void
+_show_image_preview(gl_item_info *info)
+{
+   image_preview_st *st = info->preview;
+   Evas_Coord x, y, w, h;
+   st->bt = elm_button_add(elm_object_top_widget_get(st->icon));
+   st->ic = elm_icon_add(elm_object_top_widget_get(st->icon));
+   evas_object_image_source_set(elm_image_object_get(st->ic),
+         elm_image_object_get(st->icon));
+
+   elm_object_style_set(st->bt, "anchor");
+   elm_object_part_content_set(st->bt, "icon", st->ic);
+
+   evas_object_geometry_get(st->icon, &x, &y, &w, &h);
+   st->min_size = (st->w > st->h) ? (((double) (w << 1)) / st->w) :
+      (((double) (h << 1)) / st->h);
+   /* Compute icon center point */
+   st->x = x + (w >> 1);
+   st->y = y + (h >> 1);
+
+   /* Keep current icon size */
+   w = (st->min_size * st->w);
+   h = (st->min_size * st->h);
+
+   evas_object_size_hint_min_set(st->ic, w, h);
+   evas_object_move(st->bt, st->x, st->y);
+   evas_object_show(st->ic);
+   evas_object_show(st->bt);
+   evas_object_smart_callback_add(st->ic, "clicked", _preview_clicked, info);
+   st->status = EDJE_PICK_PREVIEW_BLOW;
+   evas_object_event_callback_add(st->ic, EVAS_CALLBACK_MOUSE_OUT,
+       _preview_mouse_out_cb, info);
+}
+
+static Eina_Bool
+_image_preview_timeout(void *data)
+{  /* Here we handle appear/blow/shrink/close of preview window */
+   gl_item_info *info = data;
+   image_preview_st *st = info->preview;
+
+   switch (st->status)
+     {
+      case EDJE_PICK_PREVIEW_START:
+           {
+              if (!st->ic)
+                {  /* Open window, change timer */
+                   _show_image_preview(info);
+                   st->tm = ecore_timer_add(EDJE_PICK_PREVIEW_ANIM,
+                         _image_preview_timeout, info);
+                   return ECORE_CALLBACK_CANCEL;
+                }
+              break;
+           }
+
+      case EDJE_PICK_PREVIEW_BLOW:
+           {
+              if (st->ic)
+                {
+                   Evas_Coord x, y, w, h;
+                   evas_object_geometry_get(st->ic, &x, &y, &w, &h);
+                   if (w < ((st->min_size * st->w) * 2))
+                     evas_object_size_hint_min_set(st->ic, w * 1.1, h * 1.1);
+                   else
+                     {
+                        st->tm = NULL;
+                        st->status = EDJE_PICK_PREVIEW_STABLE;
+                        return ECORE_CALLBACK_CANCEL;
+                     }
+                }
+              break;
+           }
+
+      case EDJE_PICK_PREVIEW_SHRINK:
+           {
+              if (st->ic)
+                {
+                   Evas_Coord x, y, w, h;
+                   evas_object_geometry_get(st->ic, &x, &y, &w, &h);
+                   if (w > (st->min_size * st->w))
+                     evas_object_size_hint_min_set(st->ic, w * 0.9, h * 0.9);
+                   else
+                     {
+                        st->status = EDJE_PICK_PREVIEW_END;
+                        evas_object_del(st->ic);
+                        st->tm = NULL;
+                        st->ic = NULL;
+                        return ECORE_CALLBACK_CANCEL;
+                     }
+                }
+              break;
+           }
+
+      case EDJE_PICK_PREVIEW_STABLE:
+      case EDJE_PICK_PREVIEW_END:
+      default:
+           {
+              st->tm = NULL;
+              return ECORE_CALLBACK_CANCEL;
+           }
+     }
+
+   return ECORE_CALLBACK_RENEW;
+}
+
+static void
+_icon_mouse_in_cb(void *data,
+               Evas *e __UNUSED__,
+               Evas_Object *obj __UNUSED__,
+               void *event_info __UNUSED__)
+{
+   gl_item_info *info = data;
+   image_preview_st *st = info->preview;
+   if (st->status != EDJE_PICK_PREVIEW_DETACHED)
+     {
+        if (st && (!st->ic) && (!st->tm))
+          {
+             st->status = EDJE_PICK_PREVIEW_START;
+             st->tm = ecore_timer_add(EDJE_PICK_PREVIEW_TIMEOUT,
+                   _image_preview_timeout, info);
+          }
+     }
+}
+
+static void
+_icon_mouse_out_cb(void *data,
+               Evas *e __UNUSED__,
+               Evas_Object *obj __UNUSED__,
+               void *event_info __UNUSED__)
+{
+   gl_item_info *info = data;
+   image_preview_st *st = info->preview;
+   if (st->status != EDJE_PICK_PREVIEW_DETACHED)
+     {
+        if ((!st->ic) && (st->tm))
+          {
+             ecore_timer_del(st->tm);
+             st->tm = NULL;
+          }
+     }
+}
+
 static Evas_Object *
 _group_item_icon_get(void *data EINA_UNUSED, Evas_Object *parent EINA_UNUSED,
       const char *part EINA_UNUSED)
@@ -284,8 +605,66 @@ _group_item_icon_get(void *data EINA_UNUSED, Evas_Object *parent EINA_UNUSED,
      {
         gl_item_info *info = data;
         char buf[1024];
-        snprintf(buf, sizeof(buf), "%s/icons/group.png",
-              PACKAGE_DATA_DIR);
+        switch (info->type)
+          {
+           case EDJE_PICK_TYPE_FILE:
+              snprintf(buf, sizeof(buf), "%s/icons/file.png",
+                    PACKAGE_DATA_DIR);
+              break;
+
+           case EDJE_PICK_TYPE_GROUP:
+              snprintf(buf, sizeof(buf), "%s/icons/group.png",
+                    PACKAGE_DATA_DIR);
+              break;
+
+           case EDJE_PICK_TYPE_IMAGE:
+                {
+                   image_preview_st *t = info->preview;
+                   unsigned int w, h;
+                   Evas_Object *icon = elm_icon_add(parent);
+                   Evas_Object *icon_img = elm_image_object_get(icon);
+                   if (_edje_pick_image_object_data_read(icon_img, info->ex,
+                            info->file_name, &w, &h))
+                     {
+                        evas_object_size_hint_aspect_set(icon,
+                              EVAS_ASPECT_CONTROL_VERTICAL, 1, 1);
+                        evas_object_show(icon);
+
+                        evas_object_event_callback_add
+                           (icon, EVAS_CALLBACK_MOUSE_IN,
+                            _icon_mouse_in_cb, info);
+                        evas_object_event_callback_add
+                           (icon, EVAS_CALLBACK_MOUSE_OUT,
+                            _icon_mouse_out_cb, info);
+
+                        if (t)
+                          {
+                             t->icon = icon;
+                             _image_preview_close(t);
+                             t->status = EDJE_PICK_PREVIEW_START;
+                          }
+                        else
+                          {  /* Allocate preview struct on icon-success */
+                             t = info->preview = calloc(1,
+                                   sizeof(image_preview_st));
+
+                             /* Record main-window pointer */
+                             t->icon = icon;
+                             t->status = EDJE_PICK_PREVIEW_START;
+                             t->w = w;
+                             t->h = h;
+                          }
+
+                        return icon;
+                     }
+
+                   return NULL;
+                }
+
+           default:
+              snprintf(buf, sizeof(buf), "%s/icons/group.png",
+                    PACKAGE_DATA_DIR);
+          }
 
         Evas_Object *icon = elm_icon_add(parent);
         if (info->sub)
@@ -771,7 +1150,6 @@ _load_file(Evas_Object *gl,
           {
              eina_list_free(grp);
              err = edje_pick_err_str_get(s);
-             printf("<%s> %s <%s>\n" ,__func__, err, file_name);
              _ok_popup_show(data, _cancel_popup, "File Error", err);
              return file_glit;
           }
@@ -1775,7 +2153,8 @@ _gl_createicon(void *data, Evas_Object *win, Evas_Coord *xoff, Evas_Coord *yoff)
         if (xoff) *xoff = xm - (w/2);
         if (yoff) *yoff = ym - (h/2);
         icon = elm_icon_add(win);
-        elm_image_file_set(icon, f, g);
+        evas_object_image_source_set(elm_image_object_get(icon),
+              elm_image_object_get(o));
         evas_object_size_hint_align_set(icon,
               EVAS_HINT_FILL, EVAS_HINT_FILL);
         evas_object_size_hint_weight_set(icon,
@@ -1790,7 +2169,6 @@ _gl_createicon(void *data, Evas_Object *win, Evas_Coord *xoff, Evas_Coord *yoff)
 static Eina_List *
 _gl_icons_get(void *data)
 {  /* Start icons animation before actually drag-starts */
-   printf("<%s> <%d>\n", __func__, __LINE__);
    int yposret = 0;
 
    Eina_List *l;
@@ -2257,8 +2635,8 @@ left_pane_create(gui_elements *g)
          _gl_dropcb, g);
 
    elm_drag_item_container_add(g->gl_src,
-         ANIM_TIME,
-         DRAG_TIMEOUT,
+         EDJE_PICK_ANIM_TIME,
+         EDJE_PICK_DRAG_TIMEOUT,
          _gl_item_getcb,
          _gl_dnd_default_anim_data_getcb);
 
@@ -2304,8 +2682,8 @@ right_pane_create(gui_elements *g)
          _gl_dropcb, g);
 
    elm_drag_item_container_add(g->gl_dst,
-         ANIM_TIME,
-         DRAG_TIMEOUT,
+         EDJE_PICK_ANIM_TIME,
+         EDJE_PICK_DRAG_TIMEOUT,
          _gl_item_getcb,
          _gl_dnd_default_anim_data_getcb);
 
