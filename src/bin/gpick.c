@@ -598,33 +598,75 @@ _icon_mouse_out_cb(void *data,
 }
 
 static Evas_Object *
+_item_icon_create(gl_item_info *info, Evas_Object *parent,
+      unsigned int *w, unsigned int *h)
+{
+   Evas_Object *icon = NULL;
+   char buf[1024];
+   switch (info->type)
+     {
+      case EDJE_PICK_TYPE_FILE:
+           {
+              snprintf(buf, sizeof(buf), "%s/icons/file.png",
+                    PACKAGE_DATA_DIR);
+              icon = elm_icon_add(parent);
+              elm_image_file_set(icon, buf, NULL);
+              evas_object_size_hint_aspect_set(icon,
+                    EVAS_ASPECT_CONTROL_VERTICAL, 1, 1);
+              evas_object_show(icon);
+              return icon;
+           }
+
+      case EDJE_PICK_TYPE_GROUP:
+           {
+              snprintf(buf, sizeof(buf), "%s/icons/group.png",
+                    PACKAGE_DATA_DIR);
+              icon = elm_icon_add(parent);
+              elm_image_file_set(icon, buf, NULL);
+              evas_object_size_hint_aspect_set(icon,
+                    EVAS_ASPECT_CONTROL_VERTICAL, 1, 1);
+              evas_object_show(icon);
+              return icon;
+           }
+
+      case EDJE_PICK_TYPE_IMAGE:
+           {
+              icon = elm_icon_add(parent);
+              Evas_Object *icon_img = elm_image_object_get(icon);
+              if (_edje_pick_image_object_data_read(icon_img, info->ex,
+                       info->file_name, w, h))
+                {
+                   evas_object_size_hint_aspect_set(icon,
+                         EVAS_ASPECT_CONTROL_VERTICAL, 1, 1);
+                   evas_object_show(icon);
+                }
+
+              return icon;
+           }
+
+      default:
+         break;
+     }
+
+   return icon;
+}
+
+static Evas_Object *
 _group_item_icon_get(void *data EINA_UNUSED, Evas_Object *parent EINA_UNUSED,
       const char *part EINA_UNUSED)
 {  /* TODO: Set icon according to type field */
+   Evas_Object *icon = NULL;
    if (!strcmp(part, "elm.swallow.icon"))
      {
+        unsigned int w, h;
         gl_item_info *info = data;
-        char buf[1024];
+        icon = _item_icon_create(info, parent, &w, &h);
         switch (info->type)
           {
-           case EDJE_PICK_TYPE_FILE:
-              snprintf(buf, sizeof(buf), "%s/icons/file.png",
-                    PACKAGE_DATA_DIR);
-              break;
-
-           case EDJE_PICK_TYPE_GROUP:
-              snprintf(buf, sizeof(buf), "%s/icons/group.png",
-                    PACKAGE_DATA_DIR);
-              break;
-
            case EDJE_PICK_TYPE_IMAGE:
                 {
                    image_preview_st *t = info->preview;
-                   unsigned int w, h;
-                   Evas_Object *icon = elm_icon_add(parent);
-                   Evas_Object *icon_img = elm_image_object_get(icon);
-                   if (_edje_pick_image_object_data_read(icon_img, info->ex,
-                            info->file_name, &w, &h))
+                   if (icon)
                      {
                         evas_object_size_hint_aspect_set(icon,
                               EVAS_ASPECT_CONTROL_VERTICAL, 1, 1);
@@ -654,30 +696,15 @@ _group_item_icon_get(void *data EINA_UNUSED, Evas_Object *parent EINA_UNUSED,
                              t->w = w;
                              t->h = h;
                           }
-
-                        return icon;
                      }
-
-                   return NULL;
                 }
 
            default:
-              snprintf(buf, sizeof(buf), "%s/icons/group.png",
-                    PACKAGE_DATA_DIR);
+              break;
           }
-
-        Evas_Object *icon = elm_icon_add(parent);
-        if (info->sub)
-          snprintf(buf, sizeof(buf), "%s/icons/file.png",
-                PACKAGE_DATA_DIR);
-
-        elm_image_file_set(icon, buf, NULL);
-        evas_object_size_hint_aspect_set(icon, EVAS_ASPECT_CONTROL_VERTICAL, 1, 1);
-        evas_object_show(icon);
-        return icon;
      }
 
-   return NULL;
+   return icon;
 }
 
 static void
@@ -2145,16 +2172,14 @@ _gl_createicon(void *data, Evas_Object *win, Evas_Coord *xoff, Evas_Coord *yoff)
 
    if (o)
      {
-        int xm, ym, w = 30, h = 30;
-        const char *f;
-        const char *g;
-        elm_image_file_get(o, &f, &g);
+        int xm, ym, w, h;
+        evas_object_geometry_get(o, NULL, NULL, &w, &h);
         evas_pointer_canvas_xy_get(evas_object_evas_get(o), &xm, &ym);
         if (xoff) *xoff = xm - (w/2);
         if (yoff) *yoff = ym - (h/2);
-        icon = elm_icon_add(win);
-        evas_object_image_source_set(elm_image_object_get(icon),
-              elm_image_object_get(o));
+        icon = _item_icon_create(
+              elm_object_item_data_get(data), win,
+              (unsigned int *) &xm, (unsigned int *) &ym); /* Unused */
         evas_object_size_hint_align_set(icon,
               EVAS_HINT_FILL, EVAS_HINT_FILL);
         evas_object_size_hint_weight_set(icon,
@@ -2195,10 +2220,10 @@ _gl_icons_get(void *data)
         if (o)
           {
              int x, y, w, h;
-             const char *f, *g;
-             elm_image_file_get(o, &f, &g);
-             Evas_Object *ic = elm_icon_add(data);
-             elm_image_file_set(ic, f, g);
+             Evas_Object *ic = _item_icon_create(
+                   elm_object_item_data_get(glit), o,
+                   (unsigned int *) &w, (unsigned int *) &h);
+
              evas_object_geometry_get(o, &x, &y, &w, &h);
              evas_object_size_hint_align_set(ic,
                    EVAS_HINT_FILL, EVAS_HINT_FILL);
