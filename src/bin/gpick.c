@@ -25,6 +25,7 @@
 #define EDJE_PICK_PREVIEW_ANIM 0.05
 
 static Eina_Bool _image_preview_timeout(void *data);
+static Eina_Bool _sample_preview_timeout(void *data);
 
 enum _Edje_Pick_Type
 {
@@ -38,16 +39,24 @@ enum _Edje_Pick_Type
 };
 typedef enum _Edje_Pick_Type Edje_Pick_Type;
 
-enum _Edje_Pick_Preview_Status
+enum _Edje_Pick_Image_Preview_Status
 {
-   EDJE_PICK_PREVIEW_START,    /* Preview window appears         */
-   EDJE_PICK_PREVIEW_BLOW,     /* Preview window grows in size   */
-   EDJE_PICK_PREVIEW_SHRINK,   /* Preview window shrinks in size */
-   EDJE_PICK_PREVIEW_STABLE,   /* Preview window at max-size     */
-   EDJE_PICK_PREVIEW_END,      /* Preview window closed          */
-   EDJE_PICK_PREVIEW_DETACHED  /* Preview window was detached    */
+   EDJE_PICK_PRE_IMG_START,    /* Preview window appears         */
+   EDJE_PICK_PRE_IMG_BLOW,     /* Preview window grows in size   */
+   EDJE_PICK_PRE_IMG_SHRINK,   /* Preview window shrinks in size */
+   EDJE_PICK_PRE_IMG_STABLE,   /* Preview window at max-size     */
+   EDJE_PICK_PRE_IMG_END,      /* Preview window closed          */
+   EDJE_PICK_PRE_IMG_DETACHED  /* Preview window was detached    */
 };
-typedef enum _Edje_Pick_Preview_Status Edje_Pick_Preview_Status;
+typedef enum _Edje_Pick_Image_Preview_Status Edje_Pick_Image_Preview_Status;
+
+enum _Edje_Pick_Sample_Preview_Status
+{
+   EDJE_PICK_PRE_SMP_START,
+   EDJE_PICK_PRE_SMP_COLOR_INC,  /* Change icon color before sample plays */
+   EDJE_PICK_PRE_SMP_COLOR_DEC   /* Change icon color before sample stops */
+};
+typedef enum _Edje_Pick_Sample_Preview_Status Edje_Pick_Sample_Preview_Status;
 
 struct _image_preview_st
 {
@@ -55,7 +64,7 @@ struct _image_preview_st
    Evas_Object *icon;    /* Pointer to original icon, used on create only */
    Evas_Object *ic;      /* Preview icon in bt */
    Evas_Object *bt;
-   Edje_Pick_Preview_Status status;
+   Edje_Pick_Image_Preview_Status status;
    double min_size;
    unsigned int x;       /* Center point of preview window (x) */
    unsigned int y;       /* Center point of preview window (y) */
@@ -63,6 +72,23 @@ struct _image_preview_st
    unsigned int h;       /* Hieght of target raw-image */
 };
 typedef struct _image_preview_st image_preview_st;
+
+struct _sample_preview_st
+{
+   Edje_Pick_Sample_Preview_Status status;
+   Ecore_Timer *tm;
+   Evas_Object *icon;    /* Pointer to original icon */
+   void *sample;
+   int size;
+
+#define INI_R 60
+#define INI_G 66
+#define INI_B 64
+#define INI_A 128
+#define COLOR_STEP 4
+   int steps;            /* Steps of color-incs */
+};
+typedef struct _sample_preview_st sample_preview_st;
 
 /* gl info as follows:
    file_name = full-path file name for all nodes.
@@ -148,6 +174,26 @@ _image_preview_close(image_preview_st *st)
      evas_object_del(st->bt);
 
    st->tm = st->ic = st->bt = NULL;
+}
+
+static Eina_Bool
+_play_sample_finished(void *data EINA_UNUSED,
+      void *in EINA_UNUSED,
+      const void *desc EINA_UNUSED,
+      void *event_info EINA_UNUSED)
+{  /* TODO: Will be used later to manage sample-playing */
+   printf("<%s> <%d>\n", __func__, __LINE__);
+   return EINA_TRUE;
+}
+
+static void
+_sample_preview_stop(sample_preview_st *st)
+{  /* TODO: Cannot stop sample that played at the moment */
+   if (st->tm)
+     ecore_timer_del(st->tm);
+
+   st->tm = NULL;
+   st->status = EDJE_PICK_PRE_IMG_START;
 }
 
 static void *
@@ -402,7 +448,7 @@ _preview_win_del(void *data,
 {  /* called when client window is deleted */
    gl_item_info *info = data;
    image_preview_st *st = info->preview;
-   st->status = EDJE_PICK_PREVIEW_START;
+   st->status = EDJE_PICK_PRE_IMG_START;
 }
 
 static void
@@ -410,7 +456,7 @@ _preview_open(gl_item_info *info)
 {  /* Open full-blown image-preview window */
    unsigned int w, h;
    image_preview_st *st = info->preview;
-   st->status = EDJE_PICK_PREVIEW_DETACHED;
+   st->status = EDJE_PICK_PRE_IMG_DETACHED;
    Evas_Object *win = elm_win_util_standard_add("Image Preview", info->name);
 
    Evas_Object *im = elm_image_add(win);
@@ -448,9 +494,9 @@ _preview_mouse_out_cb(void *data,
 {
    gl_item_info *info = data;
    image_preview_st *st = info->preview;
-   if (st->status != EDJE_PICK_PREVIEW_DETACHED)
+   if (st->status != EDJE_PICK_PRE_IMG_DETACHED)
      {
-        st->status = EDJE_PICK_PREVIEW_SHRINK;
+        st->status = EDJE_PICK_PRE_IMG_SHRINK;
         st->tm = ecore_timer_add(EDJE_PICK_PREVIEW_ANIM,
               _image_preview_timeout, info);
      }
@@ -485,7 +531,7 @@ _show_image_preview(gl_item_info *info)
    evas_object_show(st->ic);
    evas_object_show(st->bt);
    evas_object_smart_callback_add(st->ic, "clicked", _preview_clicked, info);
-   st->status = EDJE_PICK_PREVIEW_BLOW;
+   st->status = EDJE_PICK_PRE_IMG_BLOW;
    evas_object_event_callback_add(st->ic, EVAS_CALLBACK_MOUSE_OUT,
        _preview_mouse_out_cb, info);
 }
@@ -498,19 +544,20 @@ _image_preview_timeout(void *data)
 
    switch (st->status)
      {
-      case EDJE_PICK_PREVIEW_START:
+      case EDJE_PICK_PRE_IMG_START:
            {
               if (!st->ic)
                 {  /* Open window, change timer */
                    _show_image_preview(info);
                    st->tm = ecore_timer_add(EDJE_PICK_PREVIEW_ANIM,
                          _image_preview_timeout, info);
+
                    return ECORE_CALLBACK_CANCEL;
                 }
               break;
            }
 
-      case EDJE_PICK_PREVIEW_BLOW:
+      case EDJE_PICK_PRE_IMG_BLOW:
            {
               if (st->ic)
                 {
@@ -521,14 +568,14 @@ _image_preview_timeout(void *data)
                    else
                      {
                         st->tm = NULL;
-                        st->status = EDJE_PICK_PREVIEW_STABLE;
+                        st->status = EDJE_PICK_PRE_IMG_STABLE;
                         return ECORE_CALLBACK_CANCEL;
                      }
                 }
               break;
            }
 
-      case EDJE_PICK_PREVIEW_SHRINK:
+      case EDJE_PICK_PRE_IMG_SHRINK:
            {
               if (st->ic)
                 {
@@ -538,7 +585,7 @@ _image_preview_timeout(void *data)
                      evas_object_size_hint_min_set(st->ic, w * 0.9, h * 0.9);
                    else
                      {
-                        st->status = EDJE_PICK_PREVIEW_END;
+                        st->status = EDJE_PICK_PRE_IMG_END;
                         evas_object_del(st->ic);
                         st->tm = NULL;
                         st->ic = NULL;
@@ -548,8 +595,99 @@ _image_preview_timeout(void *data)
               break;
            }
 
-      case EDJE_PICK_PREVIEW_STABLE:
-      case EDJE_PICK_PREVIEW_END:
+      case EDJE_PICK_PRE_IMG_STABLE:
+      case EDJE_PICK_PRE_IMG_END:
+      default:
+           {
+              st->tm = NULL;
+              return ECORE_CALLBACK_CANCEL;
+           }
+     }
+
+   return ECORE_CALLBACK_RENEW;
+}
+
+static Eina_Bool
+_sample_preview_timeout(void *data)
+{  /* Here we handle sample preview func */
+   gl_item_info *info = data;
+   sample_info_ex *ex = info->ex;
+   sample_preview_st *st = info->preview;
+   int r;
+   int g;
+   int b;
+   int a;
+
+   switch (st->status)
+     {
+      case EDJE_PICK_PRE_SMP_COLOR_INC:
+           {
+              evas_object_color_get(st->icon, &r, &g, &b, &a);
+
+              if (g < 220)
+                {
+                   st->steps++;
+                   evas_object_color_set(st->icon,
+                         r + COLOR_STEP,
+                         g + (COLOR_STEP + COLOR_STEP),
+                         b + COLOR_STEP,
+                         a + (COLOR_STEP + COLOR_STEP));
+                }
+              else
+                {
+                   char buf[1024];
+                   st->status = EDJE_PICK_PRE_SMP_COLOR_DEC;
+                   st->tm = NULL;
+
+                   if (!st->sample)
+                     {  /* Read sample info from file */
+                        Eet_File *ef = eet_open(info->file_name,
+                              EET_FILE_MODE_READ);
+                        snprintf(buf, sizeof(buf), "edje/sounds/%i", ex->id);
+                        st->sample = (void *) eet_read_direct(ef,
+                              (const char *) buf, &st->size);
+                        eet_close(ef);
+                     }
+
+                   if (st->sample)
+                     {
+                        snprintf(buf, sizeof(buf), "%i", ex->id);
+                        edje_pick_sample_play(st->sample,
+                              buf, st->size, 1.0, _play_sample_finished);
+                     }
+                   else
+                     printf("<%s> Play sample - Failed to read.\n", __func__);
+
+                   return ECORE_CALLBACK_RENEW;
+                }
+              break;
+           }
+
+      case EDJE_PICK_PRE_SMP_COLOR_DEC:
+           {
+              if (st->steps)
+                {
+                   st->steps--;
+                   evas_object_color_get(st->icon, &r, &g, &b, &a);
+                   evas_object_color_set(st->icon,
+                         r - COLOR_STEP,
+                         g - COLOR_STEP,
+                         b - COLOR_STEP,
+                         a - COLOR_STEP);
+
+                   return ECORE_CALLBACK_RENEW;
+                }
+              else
+                {
+                   evas_object_color_set(st->icon, 255, 255, 255, 255);
+                   st->status = EDJE_PICK_PRE_SMP_START;
+                   st->tm = NULL;
+                   return ECORE_CALLBACK_CANCEL;
+                }
+
+              break;
+           }
+
       default:
            {
               st->tm = NULL;
@@ -567,15 +705,36 @@ _icon_mouse_in_cb(void *data,
                void *event_info __UNUSED__)
 {
    gl_item_info *info = data;
-   image_preview_st *st = info->preview;
-   if (st->status != EDJE_PICK_PREVIEW_DETACHED)
+   switch (info->type)
      {
-        if (st && (!st->ic) && (!st->tm))
-          {
-             st->status = EDJE_PICK_PREVIEW_START;
-             st->tm = ecore_timer_add(EDJE_PICK_PREVIEW_TIMEOUT,
-                   _image_preview_timeout, info);
-          }
+      case EDJE_PICK_TYPE_IMAGE:
+           {
+              image_preview_st *st = info->preview;
+              if (st->status != EDJE_PICK_PRE_IMG_DETACHED)
+                {
+                   if (st && (!st->ic) && (!st->tm))
+                     {
+                        st->status = EDJE_PICK_PRE_IMG_START;
+                        st->tm = ecore_timer_add(EDJE_PICK_PREVIEW_TIMEOUT,
+                              _image_preview_timeout, info);
+                     }
+                }
+              break;
+           }
+
+      case EDJE_PICK_TYPE_SAMPLE:
+           {
+              sample_preview_st *st = info->preview;
+              _sample_preview_stop(st);
+              st->status = EDJE_PICK_PRE_SMP_COLOR_INC;
+              evas_object_color_set(st->icon, INI_R, INI_G, INI_B, INI_A);
+              st->tm = ecore_timer_add(EDJE_PICK_PREVIEW_ANIM,
+                    _sample_preview_timeout, info);
+              break;
+           }
+
+      default:
+         break;
      }
 }
 
@@ -586,14 +745,34 @@ _icon_mouse_out_cb(void *data,
                void *event_info __UNUSED__)
 {
    gl_item_info *info = data;
-   image_preview_st *st = info->preview;
-   if (st->status != EDJE_PICK_PREVIEW_DETACHED)
+   switch (info->type)
      {
-        if ((!st->ic) && (st->tm))
-          {
-             ecore_timer_del(st->tm);
-             st->tm = NULL;
-          }
+      case EDJE_PICK_TYPE_IMAGE:
+           {
+              image_preview_st *st = info->preview;
+              if (st->status != EDJE_PICK_PRE_IMG_DETACHED)
+                {
+                   if ((!st->ic) && (st->tm))
+                     {
+                        ecore_timer_del(st->tm);
+                        st->tm = NULL;
+                     }
+                }
+              break;
+           }
+
+      case EDJE_PICK_TYPE_SAMPLE:
+           {
+              sample_preview_st *st = info->preview;
+              if (st->status == EDJE_PICK_PRE_SMP_COLOR_INC)
+                {
+                   st->status = EDJE_PICK_PRE_SMP_COLOR_DEC;
+                }
+              break;
+           }
+
+      default:
+         break;
      }
 }
 
@@ -605,30 +784,6 @@ _item_icon_create(gl_item_info *info, Evas_Object *parent,
    char buf[1024];
    switch (info->type)
      {
-      case EDJE_PICK_TYPE_FILE:
-           {
-              snprintf(buf, sizeof(buf), "%s/icons/file.png",
-                    PACKAGE_DATA_DIR);
-              icon = elm_icon_add(parent);
-              elm_image_file_set(icon, buf, NULL);
-              evas_object_size_hint_aspect_set(icon,
-                    EVAS_ASPECT_CONTROL_VERTICAL, 1, 1);
-              evas_object_show(icon);
-              return icon;
-           }
-
-      case EDJE_PICK_TYPE_GROUP:
-           {
-              snprintf(buf, sizeof(buf), "%s/icons/group.png",
-                    PACKAGE_DATA_DIR);
-              icon = elm_icon_add(parent);
-              elm_image_file_set(icon, buf, NULL);
-              evas_object_size_hint_aspect_set(icon,
-                    EVAS_ASPECT_CONTROL_VERTICAL, 1, 1);
-              evas_object_show(icon);
-              return icon;
-           }
-
       case EDJE_PICK_TYPE_IMAGE:
            {
               icon = elm_icon_add(parent);
@@ -644,8 +799,40 @@ _item_icon_create(gl_item_info *info, Evas_Object *parent,
               return icon;
            }
 
+      case EDJE_PICK_TYPE_FILE:
+           {
+              snprintf(buf, sizeof(buf), "%s/icons/file.png",
+                    PACKAGE_DATA_DIR);
+              icon = elm_icon_add(parent);
+              break;
+           }
+
+      case EDJE_PICK_TYPE_GROUP:
+           {
+              snprintf(buf, sizeof(buf), "%s/icons/group.png",
+                    PACKAGE_DATA_DIR);
+              icon = elm_icon_add(parent);
+              break;
+           }
+
+      case EDJE_PICK_TYPE_SAMPLE:
+           {
+              snprintf(buf, sizeof(buf), "%s/icons/sample.png",
+                    PACKAGE_DATA_DIR);
+              icon = elm_icon_add(parent);
+              break;
+           }
+
       default:
          break;
+     }
+
+   if (icon)
+     {
+        elm_image_file_set(icon, buf, NULL);
+        evas_object_size_hint_aspect_set(icon,
+              EVAS_ASPECT_CONTROL_VERTICAL, 1, 1);
+        evas_object_show(icon);
      }
 
    return icon;
@@ -661,6 +848,15 @@ _group_item_icon_get(void *data EINA_UNUSED, Evas_Object *parent EINA_UNUSED,
         unsigned int w, h;
         gl_item_info *info = data;
         icon = _item_icon_create(info, parent, &w, &h);
+
+   if (icon)
+     {
+        evas_object_event_callback_add (icon, EVAS_CALLBACK_MOUSE_IN,
+              _icon_mouse_in_cb, info);
+        evas_object_event_callback_add (icon, EVAS_CALLBACK_MOUSE_OUT,
+              _icon_mouse_out_cb, info);
+     }
+
         switch (info->type)
           {
            case EDJE_PICK_TYPE_IMAGE:
@@ -672,18 +868,11 @@ _group_item_icon_get(void *data EINA_UNUSED, Evas_Object *parent EINA_UNUSED,
                               EVAS_ASPECT_CONTROL_VERTICAL, 1, 1);
                         evas_object_show(icon);
 
-                        evas_object_event_callback_add
-                           (icon, EVAS_CALLBACK_MOUSE_IN,
-                            _icon_mouse_in_cb, info);
-                        evas_object_event_callback_add
-                           (icon, EVAS_CALLBACK_MOUSE_OUT,
-                            _icon_mouse_out_cb, info);
-
                         if (t)
                           {
                              t->icon = icon;
                              _image_preview_close(t);
-                             t->status = EDJE_PICK_PREVIEW_START;
+                             t->status = EDJE_PICK_PRE_IMG_START;
                           }
                         else
                           {  /* Allocate preview struct on icon-success */
@@ -692,11 +881,33 @@ _group_item_icon_get(void *data EINA_UNUSED, Evas_Object *parent EINA_UNUSED,
 
                              /* Record main-window pointer */
                              t->icon = icon;
-                             t->status = EDJE_PICK_PREVIEW_START;
+                             t->status = EDJE_PICK_PRE_IMG_START;
                              t->w = w;
                              t->h = h;
                           }
                      }
+                   break;
+                }
+
+           case EDJE_PICK_TYPE_SAMPLE:
+                {
+                   sample_preview_st *s = info->preview;
+                   if (s)
+                     {
+                        s->icon = icon;
+                        _sample_preview_stop(s);
+                        s->status = EDJE_PICK_PRE_SMP_START;
+                     }
+                   else
+                     {  /* Allocate preview struct on icon-success */
+                        s = info->preview = calloc(1,
+                              sizeof(sample_preview_st));
+
+                        /* Record main-window pointer */
+                        s->icon = icon;
+                        s->status = EDJE_PICK_PRE_SMP_START;
+                     }
+                   break;
                 }
 
            default:
@@ -2166,7 +2377,6 @@ _drop_open_file(gui_elements *g, char *file_name)
 static Evas_Object *
 _gl_createicon(void *data, Evas_Object *win, Evas_Coord *xoff, Evas_Coord *yoff)
 {
-   printf("<%s> <%d>\n", __func__, __LINE__);
    Evas_Object *icon = NULL;
    Evas_Object *o = elm_object_item_part_content_get(data, "elm.swallow.icon");
 
@@ -2387,7 +2597,6 @@ _gl_dnd_default_anim_data_getcb(Evas_Object *obj,  /* The genlist object */
       Elm_Object_Item *it,
       Elm_Drag_User_Info *info)
 {  /* This called before starting to drag, mouse-down was on it */
-   printf("<%s> <%d>\n", __func__, __LINE__);
    info->format = ELM_SEL_FORMAT_TARGETS;
    info->createicon = _gl_createicon;
    info->createdata = it;
@@ -2398,8 +2607,6 @@ _gl_dnd_default_anim_data_getcb(Evas_Object *obj,  /* The genlist object */
    /* Save list pointer to remove items after drop and free list on done */
    info->data = info->acceptdata = info->donecbdata =
       (char *) _gl_get_drag_data(obj, it);
-
-   printf("%s - data = %s\n", __FUNCTION__, info->data);
 
    if (info->data)
      return EINA_TRUE;
