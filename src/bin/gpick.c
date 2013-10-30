@@ -919,6 +919,14 @@ _group_item_icon_get(void *data EINA_UNUSED, Evas_Object *parent EINA_UNUSED,
 }
 
 static void
+_font_preview_set(Elm_Object_Item *glit, gl_item_info *treeit)
+{  /* Set tooltip for font preview */
+   char ttip[256];  /* TODO: Just a stab-func, needs to be fixed later */
+   sprintf(ttip, "<font=%s font_size=14 %s", treeit->name,  treeit->name);
+   elm_object_tooltip_text_set(elm_object_item_widget_get(glit), ttip);
+}
+
+static void
 gl_exp(void *data, Evas_Object *obj, void *event_info)
 {
    gui_elements *g = data;
@@ -949,7 +957,11 @@ gl_exp(void *data, Evas_Object *obj, void *event_info)
               itc = &g->itc;
           }
 
-        elm_genlist_item_append(obj, itc, treeit, glit, iflag, NULL, NULL);
+        Elm_Object_Item *it =
+           elm_genlist_item_append(obj, itc, treeit, glit, iflag, NULL, NULL);
+
+        if (treeit->type == EDJE_PICK_TYPE_FONT)
+          _font_preview_set(it, treeit);
      }
 }
 
@@ -1708,9 +1720,14 @@ _leaf_item_move(gui_elements *g,
         list_info->sub = eina_list_append(list_info->sub, info);
         if (elm_genlist_item_expanded_get(ithd))
           {
-             elm_genlist_item_append(dst, &(g->itc), info, ithd,
-                   ELM_GENLIST_ITEM_NONE, NULL, NULL);
+             Elm_Object_Item *itlf =
+                elm_genlist_item_append(dst, &(g->itc), info, ithd,
+                      ELM_GENLIST_ITEM_NONE, NULL, NULL);
+
              elm_genlist_item_update(ithd);
+
+             if (info->type == EDJE_PICK_TYPE_FONT)
+               _font_preview_set(itlf, info);
           }
      }
 
