@@ -443,6 +443,21 @@ _edje_pick_image_object_data_read(Evas_Object *o,
 }
 
 static void
+_group_preview_open(gl_item_info *info)
+{  /* Open Group preview */
+   Evas_Object *win = elm_win_util_standard_add("Group Preview", info->name);
+   Evas_Object *ly = elm_layout_add(win);
+   elm_layout_file_set(ly, info->file_name, info->name);
+   evas_object_size_hint_weight_set(ly, EVAS_HINT_EXPAND, EVAS_HINT_EXPAND);
+   evas_object_size_hint_align_set(ly, EVAS_HINT_FILL, EVAS_HINT_FILL);
+   elm_layout_sizing_eval(ly);
+   elm_win_resize_object_add(win, ly);
+   elm_win_autodel_set(win, EINA_TRUE);
+   evas_object_show(ly);
+   evas_object_show(win);
+}
+
+static void
 _preview_win_del(void *data,
       Evas_Object *obj EINA_UNUSED, void *event_info EINA_UNUSED)
 {  /* called when client window is deleted */
@@ -2849,6 +2864,24 @@ _gl_dropcb(void *data, Evas_Object *obj,
 /* END   - Drag And Drop Support */
 
 static void
+_gl_item_selected(void *data,
+      Evas_Object *obj,
+      void *event_info)
+{
+   gl_item_info *info = elm_object_item_data_get(event_info);
+   printf("<%s> gl=<%p> selected <%s>\n", __func__, obj, info->name);
+}
+
+static void
+_gl_item_unselected(void *data,
+      Evas_Object *obj,
+      void *event_info)
+{
+   gl_item_info *info = elm_object_item_data_get(event_info);
+   printf("<%s> gl=<%p> unselected <%s>\n", __func__, obj, info->name);
+}
+
+static void
 left_pane_create(gui_elements *g)
 {
    Evas_Object *hbx;
@@ -2870,6 +2903,8 @@ left_pane_create(gui_elements *g)
          EVAS_HINT_FILL, EVAS_HINT_FILL);
    evas_object_size_hint_weight_set(g->gl_src, 100.0, 100.0);
 
+   evas_object_smart_callback_add(g->gl_src, "selected", _gl_item_selected, g);
+   evas_object_smart_callback_add(g->gl_src, "unselected", _gl_item_unselected, g);
    evas_object_smart_callback_add(g->gl_src, "expand,request", gl_exp_req, g);
    evas_object_smart_callback_add(g->gl_src, "contract,request", gl_con_req, g);
    evas_object_smart_callback_add(g->gl_src, "expanded", gl_exp, g);
@@ -2917,6 +2952,8 @@ right_pane_create(gui_elements *g)
          EVAS_HINT_FILL, EVAS_HINT_FILL);
    evas_object_size_hint_weight_set(g->gl_dst, 100.0, 100.0);
 
+   evas_object_smart_callback_add(g->gl_dst, "selected", _gl_item_selected, g);
+   evas_object_smart_callback_add(g->gl_dst, "unselected", _gl_item_unselected, g);
    evas_object_smart_callback_add(g->gl_dst, "expand,request", gl_exp_req, g);
    evas_object_smart_callback_add(g->gl_dst, "contract,request", gl_con_req, g);
    evas_object_smart_callback_add(g->gl_dst, "expanded", gl_exp, g);
