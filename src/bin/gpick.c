@@ -100,12 +100,13 @@ typedef struct _sample_preview_st sample_preview_st;
    For each sub-item just fill-in name and set sub to NULL */
 struct _gl_item_info
 {
-   const char *file_name;  /* From what file it comes */
-   Edje_Pick_Type type;    /* Specifys what type of data struct contains */
-   const char *name;       /* Item name to display */
-   void *ex;               /* Extra info for this item */
-   void *preview;          /* Will point to a preview struct if alloc */
-   Eina_List *sub;         /* Not NULL for item represent head of tree */
+   const char *file_name;   /* From what file it comes */
+   Edje_Pick_Type type;     /* Specifys what type of data struct contains */
+   const char *name;        /* Item name to display */
+   void *ex;                /* Extra info for this item */
+   void *preview;           /* Will point to a preview struct if alloc */
+   Eina_List *sub;          /* Not NULL for item represent head of tree */
+   Eina_List *r;            /* Replacement (used by Image, Sample, Font) */
 };
 typedef struct _gl_item_info gl_item_info;
 
@@ -119,6 +120,8 @@ typedef struct _action_st action_st;
 
 struct _gl_actions
 {  /* For UNDO, REDO */
+   Elm_Object_Item *take_bt;
+   Elm_Object_Item *remove_bt;
    Elm_Object_Item *undo_bt;
    Elm_Object_Item *redo_bt;
    Eina_List *act; /* List of action_st structs */
@@ -300,11 +303,19 @@ _actions_list_clear(gl_actions *a)
 
    EINA_LIST_FREE(a->act, st)
      {
-        eina_list_free(st->list);
+        gl_item_info *i;
+        EINA_LIST_FREE(st->list, i)
+          {
+             eina_list_free(i->r);
+             i->r = NULL;
+          }
+
         free(st);
      }
 
    a->c = 0;
+   elm_object_item_disabled_set(a->take_bt, EINA_TRUE);
+   elm_object_item_disabled_set(a->remove_bt, EINA_TRUE);
    elm_object_item_disabled_set(a->redo_bt, EINA_TRUE);
    elm_object_item_disabled_set(a->undo_bt, EINA_TRUE);
 }
@@ -332,7 +343,13 @@ _actions_list_add(gl_actions *a, Eina_List *infos,
              action_st *t = eina_list_nth(a->act, a->c);
              while (t)
                {
-                  eina_list_free(t->list);
+                  gl_item_info *i;
+                  EINA_LIST_FREE(t->list, i)
+                    {
+                       eina_list_free(i->r);
+                       i->r = NULL;
+                    }
+
                   free(t);
                   a->act = eina_list_remove(a->act, t);
                   t = eina_list_nth(a->act, a->c);
@@ -862,6 +879,9 @@ _group_item_icon_get(void *data EINA_UNUSED, Evas_Object *parent EINA_UNUSED,
      {
         unsigned int w, h;
         gl_item_info *info = data;
+        if (info->r)
+          info = eina_list_data_get(eina_list_last(info->r));
+
         icon = _item_icon_create(info, parent, &w, &h);
 
    if (icon)
@@ -1715,6 +1735,44 @@ _list_item_add(gui_elements *g, Evas_Object *gl,
 }
 
 static void
+_leaf_item_update(gui_elements *g,
+      Evas_Object *src, Evas_Object *dst,
+      gl_item_info *info, Eina_List **plm)
+{  /* Add a replacment-struct to info */
+   /* Locate same-type selected info in dst list */
+   Eina_List *l;
+   Elm_Object_Item *it;
+   Eina_Bool redo = (!plm) && (dst == g->gl_dst);
+
+   /* Use src as dst in case of an undo */
+   const Eina_List *slct = elm_genlist_selected_items_get((plm || redo) ?
+         dst : src);
+
+   EINA_LIST_FOREACH((Eina_List *) slct, l, it)
+     {  /* Build a list of all selected-items infos */
+        gl_item_info *t = elm_object_item_data_get(it);
+        if (t->type == info->type)
+          {  /* Find item to update in dest list */
+             if (plm || redo)
+               {  /* Commit update, do not reg action on redo */
+                  t->r = eina_list_append(t->r, info);
+                  elm_genlist_item_update(it);
+
+                  if (plm) /* Register this action in UNDO, REDO list */
+                    *plm = eina_list_append(*plm, info);
+               }
+             else
+               {  /* We are doing an undo */
+                  t->r = eina_list_remove_list(t->r, eina_list_last(t->r));
+                  elm_genlist_item_update(it);
+               }
+
+             return;
+          }
+     }
+}
+
+static void
 _leaf_item_move(gui_elements *g,
       Evas_Object *src, Evas_Object *dst,
       gl_item_info *info, Eina_List **plm)
@@ -1722,6 +1780,19 @@ _leaf_item_move(gui_elements *g,
    Elm_Object_Item *it = _glit_node_find(src, info);
    Elm_Object_Item *pit = NULL;
    const char *file = (dst == g->gl_src) ? (info->file_name) : NULL;
+
+   switch (info->type)
+     {
+      case EDJE_PICK_TYPE_IMAGE:
+      case EDJE_PICK_TYPE_SAMPLE:
+      case EDJE_PICK_TYPE_FONT:
+           {  /* Do an update procedure for these types instead */
+              return _leaf_item_update(g, src, dst, info, plm);
+           }
+
+      default:
+         break;
+     }
 
    if (!_gl_data_find(dst, file, info->type, info->name))
      {  /* Add leaf-data to dest genlist */
@@ -2863,13 +2934,116 @@ _gl_dropcb(void *data, Evas_Object *obj,
 #undef FNTR
 /* END   - Drag And Drop Support */
 
+static int
+_g_selected_types_count(Evas_Object *gl,
+      int *groups, int *images, int *samples, int *fonts)
+{  /* Returns number of items selected for each type */
+   Eina_List *s = NULL;
+   Eina_List *l;
+   gl_item_info *info;
+   Elm_Object_Item *it;
+
+   *groups = *images = *samples = *fonts = 0;
+   const Eina_List *slct = elm_genlist_selected_items_get(gl);
+   EINA_LIST_FOREACH((Eina_List *) slct, l, it)
+     {  /* Build a list of all selected-items infos */
+        s = eina_list_append(s, elm_object_item_data_get(it));
+     }
+
+   EINA_LIST_FOREACH(s, l, info)
+     {
+        switch (info->type)
+          {
+           case EDJE_PICK_TYPE_LIST:
+              if (strcmp(info->name, EDJE_PICK_GROUPS_STR))
+                break;
+
+           case EDJE_PICK_TYPE_GROUP:
+              (*groups)++;  /* Also counting group-list as group */
+              break;
+
+           case EDJE_PICK_TYPE_IMAGE:
+              (*images)++;
+              break;
+
+           case EDJE_PICK_TYPE_SAMPLE:
+              (*samples)++;
+                 break;
+
+           case EDJE_PICK_TYPE_FONT:
+              (*fonts)++;
+              break;
+
+           default:
+              break;
+          }
+     }
+
+   eina_list_free(s);
+printf("<%s> (groups,images,samples,fonts)=(%d,%d,%d,%d)\n",__func__,*groups,*images,*samples,*fonts);
+   return ((*groups) + (*images) + (*samples) + (*fonts));
+}
+
 static void
 _gl_item_selected(void *data,
       Evas_Object *obj,
       void *event_info)
 {
+   gui_elements *g = data;
    gl_item_info *info = elm_object_item_data_get(event_info);
+   int src_groups, src_images, src_samples, src_fonts;
+   int dst_groups, dst_images, dst_samples, dst_fonts;
+   Eina_Bool en_take_bt = EINA_FALSE;
+   Eina_Bool en_remove_bt = EINA_FALSE;
+   int n_src =_g_selected_types_count(g->gl_src,
+         &src_groups, &src_images, &src_samples, &src_fonts);
+   int n_dst = _g_selected_types_count(g->gl_dst,
+         &dst_groups, &dst_images, &dst_samples, &dst_fonts);
+
    printf("<%s> gl=<%p> selected <%s>\n", __func__, obj, info->name);
+   if (obj == g->gl_src)
+     {
+        if (!n_src)
+          en_take_bt = EINA_TRUE;
+
+           if (src_groups)
+             {
+                if ((src_images + src_samples + src_fonts) != 0)
+                  en_take_bt = EINA_TRUE;
+             }
+           else
+             {
+                if ((src_images + src_samples + src_fonts) > 1)
+                  en_take_bt = EINA_TRUE;
+
+                if (src_images && (dst_images == 0))
+                  en_take_bt = EINA_TRUE;
+
+                if (src_samples && (dst_samples == 0))
+                  en_take_bt = EINA_TRUE;
+
+                if (src_fonts && (dst_fonts == 0))
+                  en_take_bt = EINA_TRUE;
+             }
+
+        elm_object_item_disabled_set(g->actions.take_bt,
+              en_take_bt);
+     }
+
+   if (obj == g->gl_dst)
+     {
+        if (!n_dst)
+          en_remove_bt = EINA_TRUE;
+
+        if (dst_groups)
+          {
+             if ((dst_images + dst_samples + dst_fonts) != 0)
+               en_remove_bt = EINA_TRUE;
+          }
+
+        elm_object_item_disabled_set(g->actions.remove_bt,
+              en_remove_bt);
+     }
 }
 
 static void
@@ -2877,8 +3051,55 @@ _gl_item_unselected(void *data,
       Evas_Object *obj,
       void *event_info)
 {
+   gui_elements *g = data;
    gl_item_info *info = elm_object_item_data_get(event_info);
+   int src_groups, src_images, src_samples, src_fonts;
+   int dst_groups, dst_images, dst_samples, dst_fonts;
+   Eina_Bool en_take_bt = EINA_FALSE;
+   Eina_Bool en_remove_bt = EINA_FALSE;
+   int n_dst = _g_selected_types_count(g->gl_dst,
+         &dst_groups, &dst_images, &dst_samples, &dst_fonts);
+
    printf("<%s> gl=<%p> unselected <%s>\n", __func__, obj, info->name);
+
+   if (!_g_selected_types_count(g->gl_src,
+            &src_groups, &src_images, &src_samples, &src_fonts))
+     en_take_bt = EINA_TRUE;
+
+   if ((src_groups + src_images + src_samples + src_fonts) == 0)
+     en_take_bt = EINA_TRUE;
+
+   if (src_groups)
+     {
+        if ((src_images + src_samples + src_fonts) != 0)
+          en_take_bt = EINA_TRUE;
+     }
+   else
+     {
+        if ((src_images + src_samples + src_fonts) > 1)
+          en_take_bt = EINA_TRUE;
+
+        if (src_images && (dst_images == 0))
+          en_take_bt = EINA_TRUE;
+
+        if (src_samples && (dst_samples == 0))
+          en_take_bt = EINA_TRUE;
+
+        if (src_fonts && (dst_fonts == 0))
+          en_take_bt = EINA_TRUE;
+     }
+
+   elm_object_item_disabled_set(g->actions.take_bt,
+         en_take_bt);
+
+   if (!n_dst)
+     en_remove_bt = EINA_TRUE;
+
+   if ((!dst_groups) || (dst_images + dst_samples + dst_fonts) != 0)
+     en_remove_bt = EINA_TRUE;
+
+   elm_object_item_disabled_set(g->actions.remove_bt,
+         en_remove_bt);
 }
 
 static void
@@ -3029,12 +3250,16 @@ main(int argc, char **argv)
    tb_it = elm_toolbar_item_append(gui->tb, NULL, "INCLUDE",
          _include_bt_clicked, gui);
    elm_toolbar_item_selected_set(tb_it, EINA_FALSE);
-   tb_it = elm_toolbar_item_append(gui->tb, NULL, ">>",
+
+   gui->actions.take_bt = elm_toolbar_item_append(gui->tb, NULL, ">>",
          _take_bt_clicked, gui);
-   elm_toolbar_item_selected_set(tb_it, EINA_FALSE);
-   tb_it = elm_toolbar_item_append(gui->tb, NULL, "<<",
+   elm_object_item_disabled_set(gui->actions.take_bt, EINA_TRUE);
+   elm_toolbar_item_selected_set(gui->actions.take_bt, EINA_FALSE);
+
+   gui->actions.remove_bt = elm_toolbar_item_append(gui->tb, NULL, "<<",
          _remove_bt_clicked, gui);
-   elm_toolbar_item_selected_set(tb_it, EINA_FALSE);
+   elm_object_item_disabled_set(gui->actions.remove_bt, EINA_TRUE);
+   elm_toolbar_item_selected_set(gui->actions.remove_bt, EINA_FALSE);
 
    gui->actions.undo_bt = elm_toolbar_item_append(gui->tb, NULL, "UNDO",
          _undo_bt_clicked, gui);
