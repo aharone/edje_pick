@@ -35,7 +35,8 @@ enum _Edje_Pick_Type
    EDJE_PICK_TYPE_GROUP,  /* Node contains a group name */
    EDJE_PICK_TYPE_IMAGE,  /* Node contains a image name */
    EDJE_PICK_TYPE_SAMPLE, /* Node contains a sound-sample name */
-   EDJE_PICK_TYPE_FONT    /* Node contains a font name */
+   EDJE_PICK_TYPE_FONT,   /* Node contains a font name */
+   EDJE_PICK_TYPE_LAST    /* UNUSED, Marking Last */
 };
 typedef enum _Edje_Pick_Type Edje_Pick_Type;
 
@@ -2935,43 +2936,33 @@ _gl_dropcb(void *data, Evas_Object *obj,
 /* END   - Drag And Drop Support */
 
 static int
-_g_selected_types_count(Evas_Object *gl,
-      int *groups, int *images, int *samples, int *fonts)
+_g_selected_types_count(Evas_Object *gl, int *types)
 {  /* Returns number of items selected for each type */
-   Eina_List *s = NULL;
    Eina_List *l;
-   gl_item_info *info;
    Elm_Object_Item *it;
+   int i;
+   int n = 0;
 
-   *groups = *images = *samples = *fonts = 0;
+   memset(types, 0, sizeof(int) * EDJE_PICK_TYPE_LAST);
    const Eina_List *slct = elm_genlist_selected_items_get(gl);
    EINA_LIST_FOREACH((Eina_List *) slct, l, it)
-     {  /* Build a list of all selected-items infos */
-        s = eina_list_append(s, elm_object_item_data_get(it));
-     }
-
-   EINA_LIST_FOREACH(s, l, info)
      {
-        switch (info->type)
+        gl_item_info *info = elm_object_item_data_get(it);
+        Edje_Pick_Type type = info->type;
+        switch (type)
           {
            case EDJE_PICK_TYPE_LIST:
               if (strcmp(info->name, EDJE_PICK_GROUPS_STR))
                 break;
 
+              /* Count Groups-List as a group, drop all others */
+              type = EDJE_PICK_TYPE_GROUP;
+
            case EDJE_PICK_TYPE_GROUP:
-              (*groups)++;  /* Also counting group-list as group */
-              break;
-
            case EDJE_PICK_TYPE_IMAGE:
-              (*images)++;
-              break;
-
            case EDJE_PICK_TYPE_SAMPLE:
-              (*samples)++;
-                 break;
-
            case EDJE_PICK_TYPE_FONT:
-              (*fonts)++;
+              types[type]++;
               break;
 
            default:
@@ -2979,9 +2970,57 @@ _g_selected_types_count(Evas_Object *gl,
           }
      }
 
-   eina_list_free(s);
-printf("<%s> (groups,images,samples,fonts)=(%d,%d,%d,%d)\n",__func__,*groups,*images,*samples,*fonts);
-   return ((*groups) + (*images) + (*samples) + (*fonts));
+   printf("<%s> (groups,images,samples,fonts)=(%d,%d,%d,%d)\n",__func__, types[EDJE_PICK_TYPE_GROUP],types[EDJE_PICK_TYPE_IMAGE],types[EDJE_PICK_TYPE_SAMPLE],types[EDJE_PICK_TYPE_FONT]);
+
+   /* Count how many different types were involved */
+   for (i = EDJE_PICK_TYPE_GROUP; i < EDJE_PICK_TYPE_LAST; i++)
+     if (types[i]) n++;
+
+   return n;
+}
+
+static void
+_gui_keys_reset(void *data,
+      Evas_Object *obj,
+      void *event_info)
+{
+   gui_elements *g = data;
+   gl_item_info *info = elm_object_item_data_get(event_info);
+   int src_types[EDJE_PICK_TYPE_LAST];
+   int dst_types[EDJE_PICK_TYPE_LAST];
+   int i;
+   int n_src =_g_selected_types_count(g->gl_src, src_types);
+   int n_dst = _g_selected_types_count(g->gl_dst,dst_types);
+   Eina_Bool take_bt_disable = EINA_FALSE;
+   Eina_Bool remove_bt_disable = EINA_FALSE;
+
+   /* Same values should be 'turned on' in both arrays */
+   Eina_Bool xval = EINA_FALSE;
+   for (i = EDJE_PICK_TYPE_GROUP; i < EDJE_PICK_TYPE_LAST; i++)
+     xval |= (src_types[i]) ^ (dst_types[i]);
+
+   if (n_src == 1)
+     {
+        if (src_types[EDJE_PICK_TYPE_GROUP] == 0)
+          {
+             take_bt_disable = (n_dst > 1) | xval;
+          }
+     }
+   else
+     take_bt_disable = EINA_TRUE;
+
+   if (n_dst == 1)
+     {
+        if (dst_types[EDJE_PICK_TYPE_GROUP] == 0)
+          {
+             remove_bt_disable = (n_src > 1) | xval;
+          }
+     }
+   else
+     remove_bt_disable = EINA_TRUE;
+
+   elm_object_item_disabled_set(g->actions.take_bt, take_bt_disable);
+   elm_object_item_disabled_set(g->actions.remove_bt, remove_bt_disable);
 }
 
 static void
@@ -2991,59 +3030,8 @@ _gl_item_selected(void *data,
 {
    gui_elements *g = data;
    gl_item_info *info = elm_object_item_data_get(event_info);
-   int src_groups, src_images, src_samples, src_fonts;
-   int dst_groups, dst_images, dst_samples, dst_fonts;
-   Eina_Bool en_take_bt = EINA_FALSE;
-   Eina_Bool en_remove_bt = EINA_FALSE;
-   int n_src =_g_selected_types_count(g->gl_src,
-         &src_groups, &src_images, &src_samples, &src_fonts);
-   int n_dst = _g_selected_types_count(g->gl_dst,
-         &dst_groups, &dst_images, &dst_samples, &dst_fonts);
-
    printf("<%s> gl=<%p> selected <%s>\n", __func__, obj, info->name);
-   if (obj == g->gl_src)
-     {
-        if (!n_src)
-          en_take_bt = EINA_TRUE;
-
-           if (src_groups)
-             {
-                if ((src_images + src_samples + src_fonts) != 0)
-                  en_take_bt = EINA_TRUE;
-             }
-           else
-             {
-                if ((src_images + src_samples + src_fonts) > 1)
-                  en_take_bt = EINA_TRUE;
-
-                if (src_images && (dst_images == 0))
-                  en_take_bt = EINA_TRUE;
-
-                if (src_samples && (dst_samples == 0))
-                  en_take_bt = EINA_TRUE;
-
-                if (src_fonts && (dst_fonts == 0))
-                  en_take_bt = EINA_TRUE;
-             }
-
-        elm_object_item_disabled_set(g->actions.take_bt,
-              en_take_bt);
-     }
-
-   if (obj == g->gl_dst)
-     {
-        if (!n_dst)
-          en_remove_bt = EINA_TRUE;
-
-        if (dst_groups)
-          {
-             if ((dst_images + dst_samples + dst_fonts) != 0)
-               en_remove_bt = EINA_TRUE;
-          }
-
-        elm_object_item_disabled_set(g->actions.remove_bt,
-              en_remove_bt);
-     }
+   _gui_keys_reset(data, obj, event_info);
 }
 
 static void
@@ -3053,53 +3041,8 @@ _gl_item_unselected(void *data,
 {
    gui_elements *g = data;
    gl_item_info *info = elm_object_item_data_get(event_info);
-   int src_groups, src_images, src_samples, src_fonts;
-   int dst_groups, dst_images, dst_samples, dst_fonts;
-   Eina_Bool en_take_bt = EINA_FALSE;
-   Eina_Bool en_remove_bt = EINA_FALSE;
-   int n_dst = _g_selected_types_count(g->gl_dst,
-         &dst_groups, &dst_images, &dst_samples, &dst_fonts);
-
-   printf("<%s> gl=<%p> unselected <%s>\n", __func__, obj, info->name);
-
-   if (!_g_selected_types_count(g->gl_src,
-            &src_groups, &src_images, &src_samples, &src_fonts))
-     en_take_bt = EINA_TRUE;
-
-   if ((src_groups + src_images + src_samples + src_fonts) == 0)
-     en_take_bt = EINA_TRUE;
-
-   if (src_groups)
-     {
-        if ((src_images + src_samples + src_fonts) != 0)
-          en_take_bt = EINA_TRUE;
-     }
-   else
-     {
-        if ((src_images + src_samples + src_fonts) > 1)
-          en_take_bt = EINA_TRUE;
-
-        if (src_images && (dst_images == 0))
-          en_take_bt = EINA_TRUE;
-
-        if (src_samples && (dst_samples == 0))
-          en_take_bt = EINA_TRUE;
-
-        if (src_fonts && (dst_fonts == 0))
-          en_take_bt = EINA_TRUE;
-     }
-
-   elm_object_item_disabled_set(g->actions.take_bt,
-         en_take_bt);
-
-   if (!n_dst)
-     en_remove_bt = EINA_TRUE;
-
-   if ((!dst_groups) || (dst_images + dst_samples + dst_fonts) != 0)
-     en_remove_bt = EINA_TRUE;
-
-   elm_object_item_disabled_set(g->actions.remove_bt,
-         en_remove_bt);
+   printf("<%s> gl=<%p> selected <%s>\n", __func__, obj, info->name);
+   _gui_keys_reset(data, obj, event_info);
 }
 
 static void
